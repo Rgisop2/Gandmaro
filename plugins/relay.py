@@ -1,10 +1,8 @@
 import asyncio
 import time
 import re
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram import Client
 from config import API_ID, API_HASH, RELAY_TIMEOUT
-from plugins.database import db
 
 # Configuration
 FLOODWAIT_DELAY = 2  # Delay between user account requests to avoid FloodWait
@@ -39,18 +37,20 @@ async def extract_link_from_response(message):
     return link
 
 
-async def fetch_fresh_link(user_id, bot_b_start_link):
+async def fetch_fresh_link(user_id, bot_b_start_link, admin_session):
     """
-    Use relay user account session to fetch fresh link from Bot B.
-    Requires a valid relay user session to be stored in database.
+    Use the logged-in user account session to fetch fresh link from Bot B.
+    
+    Args:
+        user_id: The user requesting the link (for logging)
+        bot_b_start_link: Bot B's start link containing the payload
+        admin_session: The session string from admin's login (already authenticated user)
     """
     try:
-        # Get the relay user session from database
-        relay_session = await db.get_relay_user_session()
+        if not admin_session:
+            return None, "Admin user account not logged in. Admin must use /login first."
         
-        if not relay_session:
-            return None, "Relay user account not configured. Admin must use /setrelay first."
-        
+        # Extract payload from Bot B link
         payload_match = re.search(r'start=([^\s&]+)', bot_b_start_link)
         payload = payload_match.group(1) if payload_match else ""
         
@@ -64,22 +64,21 @@ async def fetch_fresh_link(user_id, bot_b_start_link):
         if not payload:
             return None, "No payload found in Bot B link"
         
-        print(f"[v0] Starting relay: bot_username={bot_username}, payload={payload}")
+        print(f"[v0] Starting relay: bot_username={bot_username}, payload={payload}, for_user={user_id}")
         
-        # Create user account session client using stored session string
         try:
             user_session = Client(
-                f"relay_user",
-                session_string=relay_session,
+                f"relay_user_{user_id}",
+                session_string=admin_session,
                 api_id=API_ID,
                 api_hash=API_HASH,
                 in_memory=True
             )
             await user_session.connect()
-            print("[v0] User session connected successfully")
+            print(f"[v0] Admin session connected for relaying (user_id={user_id})")
         except Exception as e:
-            print(f"[v0] Failed to connect user session: {str(e)}")
-            return None, f"Failed to initialize relay session: {str(e)}"
+            print(f"[v0] Failed to connect admin session: {str(e)}")
+            return None, f"Failed to initialize relay: {str(e)}"
         
         try:
             # Send /start command to Bot B
@@ -95,7 +94,7 @@ async def fetch_fresh_link(user_id, bot_b_start_link):
             async def get_bot_response():
                 """Listen for response from Bot B"""
                 try:
-                    # Create a simple listener
+                    # Get last message from Bot B
                     async for msg in user_session.get_chat_history(bot_username, limit=1):
                         if msg.from_user and msg.from_user.is_bot and msg.from_user.username == bot_username:
                             return msg
@@ -127,7 +126,7 @@ async def fetch_fresh_link(user_id, bot_b_start_link):
             
         finally:
             await user_session.disconnect()
-            print("[v0] User session disconnected")
+            print(f"[v0] Admin session disconnected (user_id={user_id})")
     
     except Exception as e:
         print(f"[v0] Error in fetch_fresh_link: {str(e)}")
@@ -138,6 +137,8 @@ async def relay_link_to_user(client, user_id, link):
     """
     Send the extracted link to user in the same format as Bot B.
     """
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
     try:
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("REQUEST TO JOIN", url=link)]
