@@ -112,29 +112,61 @@ async def generate_fresh_link(client, message, link_id):
             
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            # Wait a bit for the Urban_Links_bot to respond
-            await asyncio.sleep(2)
+            # We need to listen for messages until we get one with inline buttons (reply_markup)
+            messages_received = []
+            timeout = 10  # seconds to wait for messages
+            start_time = asyncio.get_event_loop().time()
+            last_message_time = start_time
             
-            conversation_messages = []
-            try:
-                async for msg in acc.get_chat_history(urban_bot_username, limit=5):
+            async for msg in acc.get_chat_history(urban_bot_username, limit=10):
+                if msg.from_user and msg.from_user.username == urban_bot_username:
+                    messages_received.append(msg)
+                    last_message_time = asyncio.get_event_loop().time()
+                    
+                    # Check if this message has inline buttons (reply_markup)
+                    if msg.reply_markup:
+                        print(f"[v0] Found message with reply_markup: {msg.text}")
+                        break
+                    
+                    # Timeout if no new messages for 3 seconds
+                    if asyncio.get_event_loop().time() - last_message_time > 3:
+                        break
+            
+            if not messages_received:
+                await asyncio.sleep(2)
+                async for msg in acc.get_chat_history(urban_bot_username, limit=10):
                     if msg.from_user and msg.from_user.username == urban_bot_username:
-                        conversation_messages.append(msg)
+                        messages_received.append(msg)
+            
+            if messages_received:
+                # Reverse to get chronological order (oldest first)
+                messages_received.reverse()
                 
-                if conversation_messages:
-                    # Get the most recent message from the bot
-                    response_msg = conversation_messages[0]
+                message_with_button = None
+                for idx, response_msg in enumerate(messages_received):
+                    # Check if this message has inline buttons
+                    has_button = response_msg.reply_markup is not None
                     
                     if response_msg.text:
-                        reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
-                        await wait_msg.edit_text(
-                            response_msg.text,
-                            reply_markup=reply_markup
-                        )
+                        reply_markup = response_msg.reply_markup if has_button else None
+                        if idx == 0:
+                            # First message, edit the wait message
+                            await wait_msg.edit_text(
+                                response_msg.text,
+                                reply_markup=reply_markup
+                            )
+                        else:
+                            # Subsequent messages, send as new message
+                            await message.reply(
+                                response_msg.text,
+                                reply_markup=reply_markup
+                            )
                     elif response_msg.caption:
-                        # For media with caption, delete wait message and send new one with media
-                        await wait_msg.delete()
-                        reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
+                        reply_markup = response_msg.reply_markup if has_button else None
+                        if idx == 0:
+                            # First message, delete wait and send media
+                            await wait_msg.delete()
+                        
                         if response_msg.photo:
                             await message.reply_photo(
                                 response_msg.photo.file_id,
@@ -147,19 +179,20 @@ async def generate_fresh_link(client, message, link_id):
                                 caption=response_msg.caption,
                                 reply_markup=reply_markup
                             )
-                        else:
-                            await message.reply(response_msg.caption, reply_markup=reply_markup)
-                    else:
-                        await wait_msg.edit_text(
-                            "**✅ Fresh link generated!**\n\n"
-                            "Click the button above to proceed with your request.\n\n"
-                            "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
-                        )
-                else:
-                    await wait_msg.edit_text("**Could not retrieve link. Please try again.**")
-            
-            except Exception as hist_err:
-                print(f"[v0] Error retrieving messages: {str(hist_err)}")
+                    
+                    # Stop after forwarding message with inline buttons
+                    if has_button:
+                        message_with_button = response_msg
+                        break
+                
+                # If no message with buttons was found, show final wait message
+                if not message_with_button:
+                    await wait_msg.edit_text(
+                        "**✅ Fresh link generated!**\n\n"
+                        "Click the button above to proceed with your request.\n\n"
+                        "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
+                    )
+            else:
                 await wait_msg.edit_text("**Could not retrieve link. Please try again.**")
         
         except Exception as e:
