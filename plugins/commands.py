@@ -37,15 +37,19 @@ async def start_message(c, m):
         # Show loading message
         loading_msg = await m.reply("Generating your link, please wait...")
         
-        # Fetch Bot B link from database or fallback to env
-        bot_b_link = await db.get_bot_b_link() or BOT_B_LINK
+        stored_payload = await db.get_bot_b_link()
         
-        if not bot_b_link:
-            await loading_msg.edit("Error: Bot B link has not been configured. Please contact the administrator.")
+        if not stored_payload:
+            await loading_msg.edit("Error: Bot B link has not been configured. Admin must use /setlink first.")
             return
         
         try:
-            admin_id = ADMINS  # Get admin ID from config
+            admin_id = ADMINS[0] if ADMINS else None
+            
+            if not admin_id:
+                await loading_msg.edit("Error: No admin configured. Check ADMINS in config.")
+                return
+            
             admin_session = await db.get_session(admin_id)
             
             if not admin_session:
@@ -58,7 +62,7 @@ async def start_message(c, m):
             return
         
         try:
-            link, error = await fetch_fresh_link(m.from_user.id, bot_b_link, admin_session)
+            link, error = await fetch_fresh_link(m.from_user.id, stored_payload, admin_session)
             
             if error:
                 await loading_msg.edit(f"Error generating link: {error}")
@@ -74,21 +78,23 @@ async def start_message(c, m):
             # Delete loading message and send the link
             await loading_msg.delete()
             await relay_link_to_user(c, m.from_user.id, link)
+            return  # Return immediately after relay logic
             
         except Exception as e:
             await loading_msg.edit(f"Error: {str(e)}")
-    else:
-        await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
-            caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Join Request Acceptor Bot. I Can Accept All Old Pending Join Request.\n\nFor All Pending Join Request Use - /accept</b>",
-            reply_markup=InlineKeyboardMarkup(
-                [[
-                    InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
-                ],[
-                    InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
-                    InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
-                ]]
-            )
+            return  # Return immediately on error
+    
+    await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
+        caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Join Request Acceptor Bot. I Can Accept All Old Pending Join Request.\n\nFor All Pending Join Request Use - /accept</b>",
+        reply_markup=InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
+            ],[
+                InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
+                InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
+            ]]
         )
+    )
 
 @Client.on_message(filters.command('accept') & filters.private)
 async def accept(client, message):
