@@ -1,8 +1,10 @@
 import asyncio 
+import time
 from pyrogram import Client, filters, enums
-from config import LOG_CHANNEL, API_ID, API_HASH, NEW_REQ_MODE
+from config import LOG_CHANNEL, API_ID, API_HASH, NEW_REQ_MODE, RELAY_MODE, BOT_B_LINK, LINK_COOLDOWN
 from plugins.database import db
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from plugins.relay import fetch_fresh_link, relay_link_to_user
 
 LOG_TEXT = """<b>#NewUser
     
@@ -16,17 +18,64 @@ async def start_message(c,m):
     if not await db.is_user_exist(m.from_user.id):
         await db.add_user(m.from_user.id, m.from_user.first_name)
         await c.send_message(LOG_CHANNEL, LOG_TEXT.format(m.from_user.id, m.from_user.mention))
-    await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
-        caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Join Request Acceptor Bot. I Can Accept All Old Pending Join Request.\n\nFor All Pending Join Request Use - /accept</b>",
-        reply_markup=InlineKeyboardMarkup(
-            [[
-                InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
-            ],[
-                InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
-                InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
-            ]]
+    
+    if RELAY_MODE:
+        # Get the payload from start parameter if exists
+        args = m.text.split(None, 1)
+        payload = args[1] if len(args) > 1 else ""
+        
+        # Check cooldown
+        current_time = time.time()
+        last_request = await db.get_user_link_cooldown(m.from_user.id)
+        
+        if current_time - last_request < LINK_COOLDOWN:
+            remaining = int(LINK_COOLDOWN - (current_time - last_request))
+            await m.reply(f"Please wait {remaining} more seconds before requesting another link.")
+            return
+        
+        # Show loading message
+        loading_msg = await m.reply("Generating your link, please wait...")
+        
+        # Fetch Bot B link from database or fallback to env
+        bot_b_link = await db.get_bot_b_link() or BOT_B_LINK
+        
+        if not bot_b_link:
+            await loading_msg.edit("Error: Bot B link has not been configured. Please contact the administrator.")
+            return
+        
+        try:
+            # Fetch fresh link from Bot B using relay
+            link, error = await fetch_fresh_link(m.from_user.id, bot_b_link)
+            
+            if error:
+                await loading_msg.edit(f"Error generating link: {error}")
+                return
+            
+            if not link:
+                await loading_msg.edit("Could not fetch link from Bot B. Please try again.")
+                return
+            
+            # Update cooldown in database
+            await db.set_user_link_cooldown(m.from_user.id, current_time)
+            
+            # Delete loading message and send the link
+            await loading_msg.delete()
+            await relay_link_to_user(c, m.from_user.id, link)
+            
+        except Exception as e:
+            await loading_msg.edit(f"Error: {str(e)}")
+    else:
+        await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
+            caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Join Request Acceptor Bot. I Can Accept All Old Pending Join Request.\n\nFor All Pending Join Request Use - /accept</b>",
+            reply_markup=InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
+                ],[
+                    InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
+                    InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
+                ]]
+            )
         )
-    )
 
 @Client.on_message(filters.command('accept') & filters.private)
 async def accept(client, message):
