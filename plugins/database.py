@@ -1,6 +1,5 @@
 import motor.motor_asyncio
 from config import DB_NAME, DB_URI
-import time
 
 class Database:
     
@@ -8,14 +7,13 @@ class Database:
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.db = self._client[database_name]
         self.col = self.db.users
-        self.relay_col = self.db.relay_config  # Store relay configuration
+        self.link_col = self.db.link_settings
 
     def new_user(self, id, name):
         return dict(
             id = id,
             name = name,
             session = None,
-            last_link_request = 0,  # Track last link request time for cooldown
         )
     
     async def add_user(self, id, name):
@@ -43,29 +41,17 @@ class Database:
         user = await self.col.find_one({'id': int(id)})
         return user['session']
 
-    async def set_bot_b_link(self, admin_id, link):
-        """Store Bot B's start link in relay config"""
-        await self.relay_col.update_one(
-            {'_id': 'bot_b_link'},
-            {'$set': {'link': link, 'set_by': admin_id, 'timestamp': time.time()}},
+    async def set_urban_link(self, link):
+        """Store the Urban Links bot link for admin"""
+        await self.link_col.update_one(
+            {'_id': 'urban_link'},
+            {'$set': {'link': link, 'updated_at': __import__('datetime').datetime.now()}},
             upsert=True
         )
-    
-    async def get_bot_b_link(self):
-        """Retrieve Bot B's start link"""
-        config = await self.relay_col.find_one({'_id': 'bot_b_link'})
-        return config['link'] if config else None
-    
-    async def set_user_link_cooldown(self, user_id, timestamp):
-        """Update user's last link request timestamp for cooldown tracking"""
-        await self.col.update_one(
-            {'id': int(user_id)},
-            {'$set': {'last_link_request': timestamp}}
-        )
-    
-    async def get_user_link_cooldown(self, user_id):
-        """Get user's last link request timestamp"""
-        user = await self.col.find_one({'id': int(user_id)})
-        return user.get('last_link_request', 0) if user else 0
+
+    async def get_urban_link(self):
+        """Retrieve the stored Urban Links bot link"""
+        doc = await self.link_col.find_one({'_id': 'urban_link'})
+        return doc['link'] if doc else None
 
 db = Database(DB_URI, DB_NAME)
