@@ -41,17 +41,27 @@ class Database:
         user = await self.col.find_one({'id': int(id)})
         return user['session']
 
-    async def set_urban_link(self, link):
-        """Store the Urban Links bot link for admin"""
-        await self.link_col.update_one(
-            {'_id': 'urban_link'},
-            {'$set': {'link': link, 'updated_at': __import__('datetime').datetime.now()}},
-            upsert=True
-        )
+    async def add_urban_link(self, link):
+        """Store a new Urban Links bot link with unique ID"""
+        import uuid
+        link_id = str(uuid.uuid4())[:8]
+        await self.link_col.insert_one({
+            '_id': link_id,
+            'link': link,
+            'created_at': __import__('datetime').datetime.now()
+        })
+        return link_id
 
-    async def get_urban_link(self):
-        """Retrieve the stored Urban Links bot link"""
-        doc = await self.link_col.find_one({'_id': 'urban_link'})
+    async def get_all_urban_links(self):
+        """Get all stored Urban Links bot links"""
+        links = []
+        async for doc in self.link_col.find({}):
+            links.append({'id': doc['_id'], 'link': doc['link']})
+        return links
+
+    async def get_urban_link_by_id(self, link_id):
+        """Get specific Urban Links bot link by ID"""
+        doc = await self.link_col.find_one({'_id': link_id})
         return doc['link'] if doc else None
 
 db = Database(DB_URI, DB_NAME)
