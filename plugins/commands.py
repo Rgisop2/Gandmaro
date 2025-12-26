@@ -68,29 +68,31 @@ async def set_link(client, message):
 
 async def generate_fresh_link(client, message, link_id):
     try:
+        wait_msg = await message.reply("⏳ **Please wait...**")
+        
         # Get stored Urban Links URL by ID
         urban_link = await db.get_urban_link_by_id(link_id)
         if not urban_link:
-            return await message.reply("**The link configuration has expired or been removed. Please contact admin.**")
+            return await wait_msg.edit_text("**The link configuration has expired or been removed. Please contact admin.**")
         
         # Extract bot username from the Urban Links URL
         bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
         if not bot_username_match:
-            return await message.reply("**Invalid link configuration. Please contact admin.**")
+            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
         
         urban_bot_username = bot_username_match.group(1)
         
         # Extract the start parameter from the Urban Links URL
         start_param_match = re.search(r'\?start=(.+)', urban_link)
         if not start_param_match:
-            return await message.reply("**Invalid link configuration. Please contact admin.**")
+            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
         
         start_param = start_param_match.group(1)
         
         # Get user's session
         user_session = await db.get_session(message.from_user.id)
         if user_session is None:
-            return await message.reply(
+            return await wait_msg.edit_text(
                 "**You need to login first to generate links.**\n\n"
                 "Use `/login` to login with your account."
             )
@@ -100,14 +102,13 @@ async def generate_fresh_link(client, message, link_id):
             acc = Client("user_client", session_string=user_session, api_hash=API_HASH, api_id=API_ID)
             await acc.connect()
         except:
-            return await message.reply("**Your login session expired. Use `/logout` then `/login` again.**")
+            return await wait_msg.edit_text("**Your login session expired. Use `/logout` then `/login` again.**")
         
         try:
             try:
                 await acc.get_chat(urban_bot_username)
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
-                # Continue anyway - the bot might still work
             
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
@@ -124,15 +125,15 @@ async def generate_fresh_link(client, message, link_id):
                     # Get the most recent message from the bot
                     response_msg = conversation_messages[0]
                     
-                    # Send the response message text and button to the user
                     if response_msg.text:
                         reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
-                        await message.reply(
+                        await wait_msg.edit_text(
                             response_msg.text,
                             reply_markup=reply_markup
                         )
                     elif response_msg.caption:
-                        # Handle media with caption
+                        # For media with caption, delete wait message and send new one with media
+                        await wait_msg.delete()
                         reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
                         if response_msg.photo:
                             await message.reply_photo(
@@ -149,21 +150,21 @@ async def generate_fresh_link(client, message, link_id):
                         else:
                             await message.reply(response_msg.caption, reply_markup=reply_markup)
                     else:
-                        await message.reply(
+                        await wait_msg.edit_text(
                             "**✅ Fresh link generated!**\n\n"
                             "Click the button above to proceed with your request.\n\n"
                             "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
                         )
                 else:
-                    await message.reply("**Could not retrieve link. Please try again.**")
+                    await wait_msg.edit_text("**Could not retrieve link. Please try again.**")
             
             except Exception as hist_err:
                 print(f"[v0] Error retrieving messages: {str(hist_err)}")
-                await message.reply("**Could not retrieve link. Please try again.**")
+                await wait_msg.edit_text("**Could not retrieve link. Please try again.**")
         
         except Exception as e:
             print(f"[v0] Error generating link: {str(e)}")
-            await message.reply(f"**Error generating link:** {str(e)}")
+            await wait_msg.edit_text(f"**Error generating link:** {str(e)}")
         
         finally:
             try:
