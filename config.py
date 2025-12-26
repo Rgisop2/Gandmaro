@@ -14,3 +14,8 @@ DB_NAME = environ.get("DB_NAME", "vjjoinrequetbot")
 
 # If this is True Then Bot Accept New Join Request 
 NEW_REQ_MODE = bool(environ.get('NEW_REQ_MODE', False))
+
+RELAY_MODE = bool(environ.get('RELAY_MODE', False))  # Enable relay link functionality
+BOT_B_LINK = environ.get("BOT_B_LINK", "")  # Fallback link if not set via admin command
+LINK_COOLDOWN = int(environ.get('LINK_COOLDOWN', 5))  # Cooldown per user in seconds
+RELAY_TIMEOUT = int(environ.get('RELAY_TIMEOUT', 8))  # Max time to wait for Bot B response
