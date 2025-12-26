@@ -107,7 +107,7 @@ async def generate_fresh_link(client, message, link_id):
         try:
             await acc.get_chat(urban_bot_username)
         except Exception as peer_err:
-            console.log(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
+            print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             # Continue anyway - the bot might still work
         
         await show.edit("**Connecting to link generator...**")
@@ -129,22 +129,48 @@ async def generate_fresh_link(client, message, link_id):
                 # Get the most recent message from the bot
                 response_msg = conversation_messages[0]
                 
-                await response_msg.forward(message.from_user.id)
+                # This avoids PEER_ID_INVALID errors and works better for sharing
                 await show.delete()
-                await message.reply(
-                    "**✅ Fresh link generated!**\n\n"
-                    "Click the button above to proceed with your request.\n\n"
-                    "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
-                )
+                
+                # Send the response message text and button to the user
+                if response_msg.text:
+                    reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
+                    await message.reply(
+                        response_msg.text,
+                        reply_markup=reply_markup
+                    )
+                elif response_msg.caption:
+                    # Handle media with caption
+                    reply_markup = response_msg.reply_markup if response_msg.reply_markup else None
+                    if response_msg.photo:
+                        await message.reply_photo(
+                            response_msg.photo.file_id,
+                            caption=response_msg.caption,
+                            reply_markup=reply_markup
+                        )
+                    elif response_msg.document:
+                        await message.reply_document(
+                            response_msg.document.file_id,
+                            caption=response_msg.caption,
+                            reply_markup=reply_markup
+                        )
+                    else:
+                        await message.reply(response_msg.caption, reply_markup=reply_markup)
+                else:
+                    await message.reply(
+                        "**✅ Fresh link generated!**\n\n"
+                        "Click the button above to proceed with your request.\n\n"
+                        "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
+                    )
             else:
                 await show.edit("**Could not retrieve link. Please try again.**")
         
         except Exception as hist_err:
-            console.log(f"[v0] Error retrieving messages: {str(hist_err)}")
+            print(f"[v0] Error retrieving messages: {str(hist_err)}")
             await show.edit("**Could not retrieve link. Please try again.**")
     
     except Exception as e:
-        console.log(f"[v0] Error generating link: {str(e)}")
+        print(f"[v0] Error generating link: {str(e)}")
         await show.edit(f"**Error generating link:** {str(e)}")
     
     finally:
