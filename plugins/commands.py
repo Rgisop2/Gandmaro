@@ -170,3 +170,7 @@ async def generate_fresh_link(client, message, link_id):
                 await acc.disconnect()
             except:
                 pass
+    
+    except Exception as e:
+        print(f"[v0] Error in generate_fresh_link: {str(e)}")
+        await message.reply("**An error occurred. Please try again.**")
