@@ -1,6 +1,7 @@
 from pyrogram import Client, filters
 from config import ADMINS, LOG_CHANNEL
 from plugins.database import db
+from urllib.parse import urlparse, parse_qs
 
 
 @Client.on_message(filters.command('setlink') & filters.private)
@@ -9,6 +10,8 @@ async def set_bot_b_link(client, message):
     Admin command to set Bot B's start link.
     Usage: /setlink <BOT_B_START_LINK>
     Example: /setlink https://t.me/Urban_Links_bot?start=req_LTEwMDE4MjU1MjgwMDI
+    
+    Extracts the payload and returns OUR bot's link, not Bot B's link.
     """
     # Check if user is admin
     if message.from_user.id != ADMINS:
@@ -32,16 +35,28 @@ async def set_bot_b_link(client, message):
         return
     
     try:
+        parsed_url = urlparse(bot_b_link)
+        query_params = parse_qs(parsed_url.query)
+        payload = query_params.get('start', [None])[0]
+        
+        if not payload:
+            await message.reply("Invalid link format. Must contain ?start=<payload>")
+            return
+        
         # Save to database
         await db.set_bot_b_link(message.from_user.id, bot_b_link)
         
+        our_bot_username = client.me.username
+        our_bot_link = f"https://t.me/{our_bot_username}?start={payload}"
+        
         # Log the action
-        log_text = f"<b>#AdminAction\n\nAdmin set Bot B link:\n<code>{bot_b_link}</code></b>"
+        log_text = f"<b>#AdminAction\n\nAdmin set Bot B link:\n<code>{bot_b_link}</code>\n\nGenerated link:\n<code>{our_bot_link}</code></b>"
         await client.send_message(LOG_CHANNEL, log_text)
         
         await message.reply(
             f"Bot B link has been saved successfully!\n\n"
-            f"Link: <code>{bot_b_link}</code>"
+            f"Use this link to share with users:\n"
+            f"<code>{our_bot_link}</code>"
         )
     except Exception as e:
         await message.reply(f"Error saving link: {str(e)}")
@@ -59,9 +74,18 @@ async def get_bot_b_link(client, message):
     try:
         link = await db.get_bot_b_link()
         if link:
-            await message.reply(f"Current Bot B link:\n<code>{link}</code>")
+            parsed_url = urlparse(link)
+            query_params = parse_qs(parsed_url.query)
+            payload = query_params.get('start', [None])[0]
+            
+            our_bot_username = client.me.username
+            our_bot_link = f"https://t.me/{our_bot_username}?start={payload}" if payload else "N/A"
+            
+            await message.reply(
+                f"<b>Bot B Link (Source):</b>\n<code>{link}</code>\n\n"
+                f"<b>Our Bot Link (To Share):</b>\n<code>{our_bot_link}</code>"
+            )
         else:
             await message.reply("No Bot B link has been set yet. Use /setlink to set one.")
     except Exception as e:
         await message.reply(f"Error retrieving link: {str(e)}")
-  
