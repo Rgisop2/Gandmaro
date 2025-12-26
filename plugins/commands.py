@@ -1,7 +1,7 @@
 import asyncio 
 import time
 from pyrogram import Client, filters, enums
-from config import LOG_CHANNEL, API_ID, API_HASH, NEW_REQ_MODE, RELAY_MODE, BOT_B_LINK, LINK_COOLDOWN
+from config import LOG_CHANNEL, API_ID, API_HASH, NEW_REQ_MODE, RELAY_MODE, BOT_B_LINK, LINK_COOLDOWN, ADMINS
 from plugins.database import db
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from plugins.relay import fetch_fresh_link, relay_link_to_user
@@ -45,8 +45,20 @@ async def start_message(c, m):
             return
         
         try:
-            # Fetch fresh link from Bot B using relay
-            link, error = await fetch_fresh_link(m.from_user.id, bot_b_link)
+            admin_id = ADMINS  # Get admin ID from config
+            admin_session = await db.get_session(admin_id)
+            
+            if not admin_session:
+                await loading_msg.edit("Error: Admin user account not logged in. Admin must use /login first.")
+                return
+            
+        except Exception as e:
+            print(f"[v0] Error getting admin session: {str(e)}")
+            await loading_msg.edit(f"Error: {str(e)}")
+            return
+        
+        try:
+            link, error = await fetch_fresh_link(m.from_user.id, bot_b_link, admin_session)
             
             if error:
                 await loading_msg.edit(f"Error generating link: {error}")
