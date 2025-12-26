@@ -14,15 +14,16 @@ Nᴀᴍᴇ - {}</b>
 """
 
 @Client.on_message(filters.command('start'))
-async def start_message(c,m):
+async def start_message(c, m):
     if not await db.is_user_exist(m.from_user.id):
         await db.add_user(m.from_user.id, m.from_user.first_name)
         await c.send_message(LOG_CHANNEL, LOG_TEXT.format(m.from_user.id, m.from_user.mention))
     
-    if RELAY_MODE:
-        # Get the payload from start parameter if exists
-        args = m.text.split(None, 1)
-        payload = args[1] if len(args) > 1 else ""
+    args = m.text.split(None, 1)
+    payload = args[1] if len(args) > 1 else ""
+    
+    if RELAY_MODE and payload and payload.startswith("req_"):
+        # Flow 2: Payload Start - Trigger link relay logic
         
         # Check cooldown
         current_time = time.time()
