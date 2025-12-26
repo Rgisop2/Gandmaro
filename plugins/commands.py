@@ -1,4 +1,5 @@
-import asyncio 
+import asyncio
+import re
 from pyrogram import Client, filters, enums
 from config import LOG_CHANNEL, API_ID, API_HASH
 from plugins.database import db
@@ -17,11 +18,11 @@ async def start_message(c, m):
         await db.add_user(m.from_user.id, m.from_user.first_name)
         await c.send_message(LOG_CHANNEL, LOG_TEXT.format(m.from_user.id, m.from_user.mention))
     
-    # Check if user started with a deep link (deep_linking parameter)
     args = m.command
-    if len(args) > 1 and args[1] == 'generate':
-        # User clicked on a shared link, generate fresh link for them
-        await generate_fresh_link(c, m)
+    if len(args) > 1 and args[1].startswith('generate_'):
+        # User clicked on a shared link with specific link ID
+        link_id = args[1].replace('generate_', '')
+        await generate_fresh_link(c, m, link_id)
     else:
         # Regular start message
         await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
@@ -50,12 +51,11 @@ async def set_link(client, message):
         if not urban_link.startswith('https://t.me/'):
             return await message.reply("**Invalid link format. Please provide a valid Telegram bot link.**")
         
-        # Store the link
-        await db.set_urban_link(urban_link)
+        link_id = await db.add_urban_link(urban_link)
         
-        # Generate bot's own shareable link
+        # Generate bot's own shareable link with unique ID
         bot_me = await client.get_me()
-        bot_link = f"https://t.me/{bot_me.username}?start=generate"
+        bot_link = f"https://t.me/{bot_me.username}?start=generate_{link_id}"
         
         await message.reply(
             f"**✅ Link has been saved successfully!**\n\n"
@@ -66,13 +66,27 @@ async def set_link(client, message):
     except Exception as e:
         await message.reply(f"**Error:** {str(e)}")
 
-async def generate_fresh_link(client, message):
+async def generate_fresh_link(client, message, link_id):
     show = await message.reply("**Please wait, generating fresh link for you...**")
     
-    # Get stored Urban Links URL
-    urban_link = await db.get_urban_link()
+    # Get stored Urban Links URL by ID
+    urban_link = await db.get_urban_link_by_id(link_id)
     if not urban_link:
-        return await show.edit("**Admin has not configured the link yet. Please try again later.**")
+        return await show.edit("**The link configuration has expired or been removed. Please contact admin.**")
+    
+    # Extract bot username from the Urban Links URL
+    bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
+    if not bot_username_match:
+        return await show.edit("**Invalid link configuration. Please contact admin.**")
+    
+    urban_bot_username = bot_username_match.group(1)
+    
+    # Extract the start parameter from the Urban Links URL
+    start_param_match = re.search(r'\?start=(.+)', urban_link)
+    if not start_param_match:
+        return await show.edit("**Invalid link configuration. Please contact admin.**")
+    
+    start_param = start_param_match.group(1)
     
     # Get user's session
     user_session = await db.get_session(message.from_user.id)
@@ -90,33 +104,47 @@ async def generate_fresh_link(client, message):
         return await show.edit("**Your login session expired. Use `/logout` then `/login` again.**")
     
     try:
-        # Start the Urban Links bot with the configured link
-        await acc.send_message("Urban_Links_bot", "/start req_LTEwMDE4MjU1MjgwMDI")
+        try:
+            await acc.get_chat(urban_bot_username)
+        except Exception as peer_err:
+            console.log(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
+            # Continue anyway - the bot might still work
         
-        await show.edit("**Processing... This may take a moment...**")
+        await show.edit("**Connecting to link generator...**")
         
-        # Wait for response from Urban_Links_bot
-        # The bot will send a message with the REQUEST TO JOIN button
-        # We'll listen for messages from Urban_Links_bot
+        await acc.send_message(urban_bot_username, f"/start {start_param}")
+        
+        await show.edit("**Processing... Retrieving fresh link for you...**")
+        
+        # Wait a bit for the Urban_Links_bot to respond
+        await asyncio.sleep(2)
+        
         conversation_messages = []
-        async for msg in acc.get_chat_history("Urban_Links_bot", limit=10):
-            if msg.from_user and msg.from_user.username == "Urban_Links_bot":
-                conversation_messages.append(msg)
-                break
+        try:
+            async for msg in acc.get_chat_history(urban_bot_username, limit=5):
+                if msg.from_user and msg.from_user.username == urban_bot_username:
+                    conversation_messages.append(msg)
+            
+            if conversation_messages:
+                # Get the most recent message from the bot
+                response_msg = conversation_messages[0]
+                
+                await response_msg.forward(message.from_user.id)
+                await show.delete()
+                await message.reply(
+                    "**✅ Fresh link generated!**\n\n"
+                    "Click the button above to proceed with your request.\n\n"
+                    "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
+                )
+            else:
+                await show.edit("**Could not retrieve link. Please try again.**")
         
-        if conversation_messages:
-            response_msg = conversation_messages[0]
-            # Forward the message to the user
-            await response_msg.forward(message.from_user.id)
-            await show.delete()
-            await message.reply(
-                "**✅ Fresh link generated!**\n\n"
-                "Click the button below to proceed with your request."
-            )
-        else:
+        except Exception as hist_err:
+            console.log(f"[v0] Error retrieving messages: {str(hist_err)}")
             await show.edit("**Could not retrieve link. Please try again.**")
     
     except Exception as e:
+        console.log(f"[v0] Error generating link: {str(e)}")
         await show.edit(f"**Error generating link:** {str(e)}")
     
     finally:
