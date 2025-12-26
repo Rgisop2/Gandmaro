@@ -8,7 +8,7 @@ class Database:
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.db = self._client[database_name]
         self.col = self.db.users
-        self.relay_col = self.db.relay_config  # Added relay configuration collection
+        self.relay_col = self.db.relay_config  # Store relay configuration
 
     def new_user(self, id, name):
         return dict(
@@ -67,18 +67,5 @@ class Database:
         """Get user's last link request timestamp"""
         user = await self.col.find_one({'id': int(user_id)})
         return user.get('last_link_request', 0) if user else 0
-    
-    async def set_relay_user_session(self, session_string, admin_id):
-        """Store relay user account session string"""
-        await self.relay_col.update_one(
-            {'_id': 'relay_session'},
-            {'$set': {'session': session_string, 'set_by': admin_id, 'timestamp': time.time()}},
-            upsert=True
-        )
-    
-    async def get_relay_user_session(self):
-        """Retrieve relay user account session string"""
-        config = await self.relay_col.find_one({'_id': 'relay_session'})
-        return config.get('session') if config else None
 
 db = Database(DB_URI, DB_NAME)
