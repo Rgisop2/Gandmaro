@@ -44,12 +44,11 @@ async def start_message(c, m):
             return
         
         try:
-            admin_id = ADMINS[0] if ADMINS else None
-            
-            if not admin_id:
-                await loading_msg.edit("Error: No admin configured. Check ADMINS in config.")
+            if not ADMINS or len(ADMINS) == 0:
+                await loading_msg.edit("Error: No admin configured. Check ADMINS environment variable.")
                 return
             
+            admin_id = ADMINS[0]
             admin_session = await db.get_session(admin_id)
             
             if not admin_session:
@@ -62,7 +61,7 @@ async def start_message(c, m):
             return
         
         try:
-            link, error = await fetch_fresh_link(m.from_user.id, stored_payload, admin_session)
+            link, error = await fetch_fresh_link(m.from_user.id, payload, admin_session)
             
             if error:
                 await loading_msg.edit(f"Error generating link: {error}")
