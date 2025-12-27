@@ -37,11 +37,6 @@ async def start_message(c, m):
             )
         )
 
-@Client.on_message(filters.command('login'))
-async def login_command(client, message):
-    """Allow admin to login with user account"""
-    await db.set_admin_user(message.from_user.id)
-    await message.reply("**Admin account set. You are now logged in.**")
 
 @Client.on_message(filters.command('setlink') & filters.private)
 async def set_link(client, message):
