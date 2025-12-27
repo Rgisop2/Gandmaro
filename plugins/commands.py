@@ -98,54 +98,61 @@ async def generate_fresh_link(client, message, link_id):
             )
         
         try:
-            # Create client with user session
-            acc = Client("user_client", session_string=user_session, api_hash=API_HASH, api_id=API_ID)
-            await acc.connect()
-        except:
-            return await wait_msg.edit_text("**Your login session expired. Use `/logout` then `/login` again.**")
-        
-        try:
             try:
                 await acc.get_chat(urban_bot_username)
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             
             received_messages = []
-            last_message_time = asyncio.get_event_loop().time()
-            grace_period = 2.0  # Wait 2 seconds of silence before assuming we got everything
+            handler_registered = False
             
             @acc.on_message(filters.user(urban_bot_username) & filters.private)
             async def capture_response(client, msg):
-                nonlocal last_message_time
                 received_messages.append(msg)
-                last_message_time = asyncio.get_event_loop().time()
+            
+            handler_registered = True
             
             # Send the /start command
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            # Wait for messages with grace period logic
-            max_wait = 10.0  # Absolute maximum wait time
+            # Wait for messages with intelligent timeout
+            # Collect messages until we see 3 seconds of silence, max 15 seconds total
+            max_wait_time = 15.0
+            silence_threshold = 3.0
             start_time = asyncio.get_event_loop().time()
+            last_message_count = 0
+            last_check_time = start_time
             
             while True:
                 current_time = asyncio.get_event_loop().time()
-                time_since_last = current_time - last_message_time
-                elapsed_total = current_time - start_time
+                elapsed = current_time - start_time
                 
-                # Stop if: grace period elapsed OR max time reached
-                if time_since_last >= grace_period or elapsed_total >= max_wait:
-                    if received_messages:
-                        break  # Got messages, process them
-                    elif elapsed_total >= max_wait:
-                        break  # Waited long enough, might be delayed
-                    
-                await asyncio.sleep(0.1)  # Small sleep to avoid busy waiting
+                # Check if we have new messages since last check
+                current_message_count = len(received_messages)
+                time_since_last_check = current_time - last_check_time
+                
+                if current_message_count > last_message_count:
+                    # We got new messages, reset checks
+                    last_message_count = current_message_count
+                    last_check_time = current_time
+                    silence_time = 0
+                else:
+                    # No new messages, track silence time
+                    silence_time = current_time - last_check_time
+                
+                # Stop conditions:
+                # 1. We have messages AND we've had silence for threshold period
+                # 2. We've hit absolute max time
+                if (current_message_count > 0 and silence_time >= silence_threshold) or elapsed >= max_wait_time:
+                    break
+                
+                await asyncio.sleep(0.2)  # Check every 200ms
             
-            # Only show error if NO messages received at all
+            # Process results
             if not received_messages:
+                # Only show error if ZERO messages received
                 await wait_msg.edit_text("**No response received from link service. Please try again.**")
             else:
-                # Process all received messages
                 for idx, response_msg in enumerate(received_messages):
                     try:
                         if response_msg.text:
