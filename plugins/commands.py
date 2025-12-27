@@ -110,32 +110,20 @@ async def generate_fresh_link(client, message, link_id):
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             
+            import time
+            request_timestamp = time.time()
+            
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            # We need to listen for messages until we get one with inline buttons (reply_markup)
+            await asyncio.sleep(1.5)
+            
             messages_received = []
-            timeout = 10  # seconds to wait for messages
-            start_time = asyncio.get_event_loop().time()
-            last_message_time = start_time
-            
-            async for msg in acc.get_chat_history(urban_bot_username, limit=10):
+            async for msg in acc.get_chat_history(urban_bot_username, limit=20):
+                # Only process messages from Urban_Links_bot that came AFTER our request
                 if msg.from_user and msg.from_user.username == urban_bot_username:
-                    messages_received.append(msg)
-                    last_message_time = asyncio.get_event_loop().time()
-                    
-                    # Check if this message has inline buttons (reply_markup)
-                    if msg.reply_markup:
-                        print(f"[v0] Found message with reply_markup: {msg.text}")
-                        break
-                    
-                    # Timeout if no new messages for 3 seconds
-                    if asyncio.get_event_loop().time() - last_message_time > 3:
-                        break
-            
-            if not messages_received:
-                await asyncio.sleep(2)
-                async for msg in acc.get_chat_history(urban_bot_username, limit=10):
-                    if msg.from_user and msg.from_user.username == urban_bot_username:
+                    # Check if message was sent after our /start request (with small buffer for processing)
+                    msg_timestamp = msg.date.timestamp() if hasattr(msg.date, 'timestamp') else msg.date
+                    if msg_timestamp >= request_timestamp - 1:  # -1 second buffer for clock skew
                         messages_received.append(msg)
             
             if messages_received:
