@@ -110,61 +110,77 @@ async def generate_fresh_link(client, message, link_id):
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             
-            message_queue = asyncio.Queue()
-            first_message_processed = False
+            received_messages = []
+            last_message_time = asyncio.get_event_loop().time()
+            grace_period = 2.0  # Wait 2 seconds of silence before assuming we got everything
             
             @acc.on_message(filters.user(urban_bot_username) & filters.private)
             async def capture_response(client, msg):
-                await message_queue.put(msg)
+                nonlocal last_message_time
+                received_messages.append(msg)
+                last_message_time = asyncio.get_event_loop().time()
             
             # Send the /start command
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            try:
-                while True:
-                    response_msg = await asyncio.wait_for(message_queue.get(), timeout=5.0)
+            # Wait for messages with grace period logic
+            max_wait = 10.0  # Absolute maximum wait time
+            start_time = asyncio.get_event_loop().time()
+            
+            while True:
+                current_time = asyncio.get_event_loop().time()
+                time_since_last = current_time - last_message_time
+                elapsed_total = current_time - start_time
+                
+                # Stop if: grace period elapsed OR max time reached
+                if time_since_last >= grace_period or elapsed_total >= max_wait:
+                    if received_messages:
+                        break  # Got messages, process them
+                    elif elapsed_total >= max_wait:
+                        break  # Waited long enough, might be delayed
                     
-                    if response_msg.text:
-                        if not first_message_processed:
-                            # First message: edit the wait message
-                            await wait_msg.edit_text(
-                                response_msg.text,
-                                reply_markup=response_msg.reply_markup
-                            )
-                            first_message_processed = True
-                        else:
-                            # Subsequent messages: send as new message
-                            await message.reply(
-                                response_msg.text,
-                                reply_markup=response_msg.reply_markup
-                            )
-                    elif response_msg.caption:
-                        # Handle media messages (photo, document, etc)
-                        if not first_message_processed:
-                            await wait_msg.delete()
-                            first_message_processed = True
-                        
-                        if response_msg.photo:
-                            await message.reply_photo(
-                                response_msg.photo.file_id,
-                                caption=response_msg.caption,
-                                reply_markup=response_msg.reply_markup
-                            )
-                        elif response_msg.document:
-                            await message.reply_document(
-                                response_msg.document.file_id,
-                                caption=response_msg.caption,
-                                reply_markup=response_msg.reply_markup
-                            )
+                await asyncio.sleep(0.1)  # Small sleep to avoid busy waiting
             
-            except asyncio.TimeoutError:
-                # No more messages received, process complete
-                if not first_message_processed:
-                    await wait_msg.edit_text("**No response received from link service. Please try again.**")
+            # Only show error if NO messages received at all
+            if not received_messages:
+                await wait_msg.edit_text("**No response received from link service. Please try again.**")
+            else:
+                # Process all received messages
+                for idx, response_msg in enumerate(received_messages):
+                    try:
+                        if response_msg.text:
+                            if idx == 0:
+                                # First message: edit the wait message
+                                await wait_msg.edit_text(
+                                    response_msg.text,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                            else:
+                                # Subsequent messages: send as new message
+                                await message.reply(
+                                    response_msg.text,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                        elif response_msg.caption:
+                            # Handle media messages (photo, document, etc)
+                            if idx == 0:
+                                await wait_msg.delete()
+                            
+                            if response_msg.photo:
+                                await message.reply_photo(
+                                    response_msg.photo.file_id,
+                                    caption=response_msg.caption,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                            elif response_msg.document:
+                                await message.reply_document(
+                                    response_msg.document.file_id,
+                                    caption=response_msg.caption,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                    except Exception as e:
+                        print(f"[v0] Error forwarding message {idx}: {str(e)}")
             
-            except Exception as e:
-                print(f"[v0] Error receiving messages: {str(e)}")
-        
         except Exception as e:
             print(f"[v0] Error generating link: {str(e)}")
             await wait_msg.edit_text(f"**Error generating link:** {str(e)}")
