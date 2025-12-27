@@ -110,78 +110,60 @@ async def generate_fresh_link(client, message, link_id):
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             
-            import time
-            request_timestamp = time.time()
+            message_queue = asyncio.Queue()
+            first_message_processed = False
             
+            @acc.on_message(filters.user(urban_bot_username) & filters.private)
+            async def capture_response(client, msg):
+                await message_queue.put(msg)
+            
+            # Send the /start command
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            await asyncio.sleep(1.5)
-            
-            messages_received = []
-            async for msg in acc.get_chat_history(urban_bot_username, limit=20):
-                # Only process messages from Urban_Links_bot that came AFTER our request
-                if msg.from_user and msg.from_user.username == urban_bot_username:
-                    # Check if message was sent after our /start request (with small buffer for processing)
-                    msg_timestamp = msg.date.timestamp() if hasattr(msg.date, 'timestamp') else msg.date
-                    if msg_timestamp >= request_timestamp - 1:  # -1 second buffer for clock skew
-                        messages_received.append(msg)
-            
-            if messages_received:
-                # Reverse to get chronological order (oldest first)
-                messages_received.reverse()
-                
-                message_with_button = None
-                for idx, response_msg in enumerate(messages_received):
-                    # Check if this message has inline buttons
-                    has_button = response_msg.reply_markup is not None
+            try:
+                while True:
+                    response_msg = await asyncio.wait_for(message_queue.get(), timeout=5.0)
                     
                     if response_msg.text:
-                        reply_markup = response_msg.reply_markup if has_button else None
-                        if idx == 0:
-                            # First message, edit the wait message
+                        if not first_message_processed:
+                            # First message: edit the wait message
                             await wait_msg.edit_text(
                                 response_msg.text,
-                                reply_markup=reply_markup
+                                reply_markup=response_msg.reply_markup
                             )
+                            first_message_processed = True
                         else:
-                            # Subsequent messages, send as new message
+                            # Subsequent messages: send as new message
                             await message.reply(
                                 response_msg.text,
-                                reply_markup=reply_markup
+                                reply_markup=response_msg.reply_markup
                             )
                     elif response_msg.caption:
-                        reply_markup = response_msg.reply_markup if has_button else None
-                        if idx == 0:
-                            # First message, delete wait and send media
+                        # Handle media messages (photo, document, etc)
+                        if not first_message_processed:
                             await wait_msg.delete()
+                            first_message_processed = True
                         
                         if response_msg.photo:
                             await message.reply_photo(
                                 response_msg.photo.file_id,
                                 caption=response_msg.caption,
-                                reply_markup=reply_markup
+                                reply_markup=response_msg.reply_markup
                             )
                         elif response_msg.document:
                             await message.reply_document(
                                 response_msg.document.file_id,
                                 caption=response_msg.caption,
-                                reply_markup=reply_markup
+                                reply_markup=response_msg.reply_markup
                             )
-                    
-                    # Stop after forwarding message with inline buttons
-                    if has_button:
-                        message_with_button = response_msg
-                        break
-                
-                # If no message with buttons was found, show final wait message
-                if not message_with_button:
-                    await wait_msg.edit_text(
-                        "**✅ Fresh link generated!**\n\n"
-                        "Click the button above to proceed with your request.\n\n"
-                        "⏰ *Note: The link expires in 1 minute. If it expires, request a new one.*"
-                    )
-            else:
-                await wait_msg.edit_text("**Could not retrieve link. Please try again.**")
+            
+            except asyncio.TimeoutError:
+                # No more messages received, process complete
+                if not first_message_processed:
+                    await wait_msg.edit_text("**No response received from link service. Please try again.**")
+            
+            except Exception as e:
+                print(f"[v0] Error receiving messages: {str(e)}")
         
         except Exception as e:
             print(f"[v0] Error generating link: {str(e)}")
