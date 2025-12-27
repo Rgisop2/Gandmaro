@@ -64,4 +64,25 @@ class Database:
         doc = await self.link_col.find_one({'_id': link_id})
         return doc['link'] if doc else None
 
+    async def set_admin_user(self, admin_id):
+        """Set which user is the admin"""
+        await self.db.admin_settings.update_one(
+            {'_id': 'admin'},
+            {'$set': {'admin_id': int(admin_id)}},
+            upsert=True
+        )
+
+    async def get_admin_user(self):
+        """Get the admin user ID"""
+        doc = await self.db.admin_settings.find_one({'_id': 'admin'})
+        return doc['admin_id'] if doc else None
+
+    async def get_admin_session(self):
+        """Get the admin's session"""
+        admin_id = await self.get_admin_user()
+        if not admin_id:
+            return None
+        user = await self.col.find_one({'id': int(admin_id)})
+        return user['session'] if user else None
+
 db = Database(DB_URI, DB_NAME)
