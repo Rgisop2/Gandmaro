@@ -37,6 +37,12 @@ async def start_message(c, m):
             )
         )
 
+@Client.on_message(filters.command('login'))
+async def login_command(client, message):
+    """Allow admin to login with user account"""
+    await db.set_admin_user(message.from_user.id)
+    await message.reply("**Admin account set. You are now logged in.**")
+
 @Client.on_message(filters.command('setlink') & filters.private)
 async def set_link(client, message):
     try:
@@ -67,8 +73,16 @@ async def set_link(client, message):
         await message.reply(f"**Error:** {str(e)}")
 
 async def generate_fresh_link(client, message, link_id):
+    """Generate fresh link using admin's session"""
     try:
         wait_msg = await message.reply("⏳ **Please wait...**")
+        
+        admin_session = await db.get_admin_session()
+        if admin_session is None:
+            return await wait_msg.edit_text(
+                "**Admin has not logged in yet.**\n\n"
+                "Please contact admin and ask them to use `/login` first."
+            )
         
         # Get stored Urban Links URL by ID
         urban_link = await db.get_urban_link_by_id(link_id)
@@ -89,42 +103,30 @@ async def generate_fresh_link(client, message, link_id):
         
         start_param = start_param_match.group(1)
         
-        # Get user's session
-        user_session = await db.get_session(message.from_user.id)
-        if user_session is None:
-            return await wait_msg.edit_text(
-                "**You need to login first to generate links.**\n\n"
-                "Use `/login` to login with your account."
-            )
+        acc = Client(
+            name="admin_session",
+            session_string=admin_session,
+            api_id=API_ID,
+            api_hash=API_HASH
+        )
+        
+        received_messages = []
         
         try:
-            acc = Client(
-                name="user_session",
-                session_string=user_session,
-                api_id=API_ID,
-                api_hash=API_HASH
-            )
             await acc.connect()
             
             try:
                 await acc.get_chat(urban_bot_username)
-            except Exception as peer_err:
-                print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
-            
-            received_messages = []
-            handler_registered = False
+            except Exception as e:
+                print(f"[v0] Could not fetch peer {urban_bot_username}: {str(e)}")
             
             @acc.on_message(filters.user(urban_bot_username) & filters.private)
-            async def capture_response(client, msg):
+            async def capture_response(aclient, msg):
                 received_messages.append(msg)
-            
-            handler_registered = True
             
             # Send the /start command
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
-            # Wait for messages with intelligent timeout
-            # Collect messages until we see 3 seconds of silence, max 15 seconds total
             max_wait_time = 15.0
             silence_threshold = 3.0
             start_time = asyncio.get_event_loop().time()
@@ -134,50 +136,38 @@ async def generate_fresh_link(client, message, link_id):
             while True:
                 current_time = asyncio.get_event_loop().time()
                 elapsed = current_time - start_time
-                
-                # Check if we have new messages since last check
                 current_message_count = len(received_messages)
                 time_since_last_check = current_time - last_check_time
                 
                 if current_message_count > last_message_count:
-                    # We got new messages, reset checks
                     last_message_count = current_message_count
                     last_check_time = current_time
                     silence_time = 0
                 else:
-                    # No new messages, track silence time
                     silence_time = current_time - last_check_time
                 
-                # Stop conditions:
-                # 1. We have messages AND we've had silence for threshold period
-                # 2. We've hit absolute max time
                 if (current_message_count > 0 and silence_time >= silence_threshold) or elapsed >= max_wait_time:
                     break
                 
-                await asyncio.sleep(0.2)  # Check every 200ms
+                await asyncio.sleep(0.2)
             
-            # Process results
             if not received_messages:
-                # Only show error if ZERO messages received
                 await wait_msg.edit_text("**No response received from link service. Please try again.**")
             else:
                 for idx, response_msg in enumerate(received_messages):
                     try:
                         if response_msg.text:
                             if idx == 0:
-                                # First message: edit the wait message
                                 await wait_msg.edit_text(
                                     response_msg.text,
                                     reply_markup=response_msg.reply_markup
                                 )
                             else:
-                                # Subsequent messages: send as new message
                                 await message.reply(
                                     response_msg.text,
                                     reply_markup=response_msg.reply_markup
                                 )
                         elif response_msg.caption:
-                            # Handle media messages (photo, document, etc)
                             if idx == 0:
                                 await wait_msg.delete()
                             
@@ -195,10 +185,10 @@ async def generate_fresh_link(client, message, link_id):
                                 )
                     except Exception as e:
                         print(f"[v0] Error forwarding message {idx}: {str(e)}")
-            
+        
         except Exception as e:
             print(f"[v0] Error generating link: {str(e)}")
-            await wait_msg.edit_text(f"**Error generating link:** {str(e)}")
+            await wait_msg.edit_text(f"**Error:** {str(e)}")
         
         finally:
             try:
