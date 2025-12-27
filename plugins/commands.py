@@ -98,6 +98,14 @@ async def generate_fresh_link(client, message, link_id):
             )
         
         try:
+            acc = Client(
+                name="user_session",
+                session_string=user_session,
+                api_id=API_ID,
+                api_hash=API_HASH
+            )
+            await acc.connect()
+            
             try:
                 await acc.get_chat(urban_bot_username)
             except Exception as peer_err:
