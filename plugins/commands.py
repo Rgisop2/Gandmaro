@@ -1,150 +1,203 @@
 import asyncio
 import re
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import API_ID, API_HASH, LOG_CHANNEL
+from pyrogram import Client, filters, enums
+from config import LOG_CHANNEL, API_ID, API_HASH
 from plugins.database import db
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 LOG_TEXT = """<b>#NewUser
+    
 ID - <code>{}</code>
-Name - {}</b>
+
+Nᴀᴍᴇ - {}</b>
 """
 
-
-# =========================
-# /start
-# =========================
-@Client.on_message(filters.command("start"))
-async def start_handler(client, message):
-    if not await db.is_user_exist(message.from_user.id):
-        await db.add_user(message.from_user.id, message.from_user.first_name)
-        await client.send_message(
-            LOG_CHANNEL,
-            LOG_TEXT.format(message.from_user.id, message.from_user.mention)
+@Client.on_message(filters.command('start'))
+async def start_message(c, m):
+    if not await db.is_user_exist(m.from_user.id):
+        await db.add_user(m.from_user.id, m.from_user.first_name)
+        await c.send_message(LOG_CHANNEL, LOG_TEXT.format(m.from_user.id, m.from_user.mention))
+    
+    args = m.command
+    if len(args) > 1 and args[1].startswith('generate_'):
+        # User clicked on a shared link with specific link ID
+        link_id = args[1].replace('generate_', '')
+        await generate_fresh_link(c, m, link_id)
+    else:
+        # Regular start message
+        await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
+            caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Link Generator Bot. I help you generate fresh join request links.\n\nShare my link with your users and they will get fresh links every time!</b>",
+            reply_markup=InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
+                ],[
+                    InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
+                    InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
+                ]]
+            )
         )
 
-    args = message.command
-
-    if len(args) > 1 and args[1].startswith("generate_"):
-        link_id = args[1].replace("generate_", "")
-        await generate_fresh_link(client, message, link_id)
-        return
-
-    await message.reply_photo(
-        "https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
-        caption=f"<b>Hello {message.from_user.mention} 👋\n\n"
-                "I am a Link Generator Bot.\n"
-                "Use shared links to get fresh join request links.</b>",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🤖 Updates", url="https://t.me/VJ_Botz")]]
-        )
-    )
-
-
-# =========================
-# /setlink (ADMIN)
-# =========================
-@Client.on_message(filters.command("setlink") & filters.private)
-async def setlink_handler(client, message):
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        return await message.reply(
-            "**Usage:** `/setlink https://t.me/Urban_Links_bot?start=req_xxx`"
-        )
-
-    urban_link = args[1].strip()
-    if not urban_link.startswith("https://t.me/"):
-        return await message.reply("**Invalid Telegram link.**")
-
-    link_id = await db.add_urban_link(urban_link)
-    me = await client.get_me()
-    bot_link = f"https://t.me/{me.username}?start=generate_{link_id}"
-
-    await message.reply(
-        f"**✅ Link saved successfully!**\n\n"
-        f"**Use this link:**\n\n`{bot_link}`",
-        disable_web_page_preview=True
-    )
-
-
-# =========================
-# CORE FIXED FUNCTION
-# =========================
-async def generate_fresh_link(client, message, link_id):
-    wait = await message.reply("⏳ **Please wait...**")
-
-    urban_link = await db.get_urban_link_by_id(link_id)
-    if not urban_link:
-        return await wait.edit_text("**Link expired. Contact admin.**")
-
-    bot_username = re.search(r"https://t\.me/(\w+)", urban_link).group(1)
-    start_param = re.search(r"\?start=(.+)", urban_link).group(1)
-
-    # 🔐 ADMIN SESSION ONLY
-    admin_session = await db.get_admin_session()
-    if not admin_session:
-        return await wait.edit_text("**Admin not logged in.**")
-
-    acc = Client(
-        "admin_user",
-        session_string=admin_session,
-        api_id=API_ID,
-        api_hash=API_HASH
-    )
-
-    await acc.connect()
-
+@Client.on_message(filters.command('setlink') & filters.private)
+async def set_link(client, message):
     try:
-        # 🔑 MARK LAST MESSAGE ID (CRITICAL FIX)
-        last_msg = await acc.get_chat_history(bot_username, limit=1)
-        last_id = last_msg[0].id if last_msg else 0
+        # Extract link from command
+        args = message.text.split(None, 1)
+        if len(args) < 2:
+            return await message.reply("**Usage:** `/setlink https://t.me/Urban_Links_bot?start=req_xxxxx`")
+        
+        urban_link = args[1].strip()
+        
+        # Validate it's a Telegram URL
+        if not urban_link.startswith('https://t.me/'):
+            return await message.reply("**Invalid link format. Please provide a valid Telegram bot link.**")
+        
+        link_id = await db.add_urban_link(urban_link)
+        
+        # Generate bot's own shareable link with unique ID
+        bot_me = await client.get_me()
+        bot_link = f"https://t.me/{bot_me.username}?start=generate_{link_id}"
+        
+        await message.reply(
+            f"**✅ Link has been saved successfully!**\n\n"
+            f"**Use this link to share with users:**\n\n"
+            f"`{bot_link}`",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        await message.reply(f"**Error:** {str(e)}")
 
-        # SEND FRESH START
-        await acc.send_message(bot_username, f"/start {start_param}")
-
-        end_time = asyncio.get_event_loop().time() + 15
-        forwarded = False
-
-        while asyncio.get_event_loop().time() < end_time:
-            await asyncio.sleep(1)
-
-            async for msg in acc.get_chat_history(bot_username, limit=5):
-                # ❌ IGNORE OLD MESSAGES
-                if msg.id <= last_id:
-                    continue
-
-                last_id = msg.id  # update marker
-
-                # first real response → remove wait
-                if not forwarded:
+async def generate_fresh_link(client, message, link_id):
+    try:
+        wait_msg = await message.reply("⏳ **Please wait...**")
+        
+        # Get stored Urban Links URL by ID
+        urban_link = await db.get_urban_link_by_id(link_id)
+        if not urban_link:
+            return await wait_msg.edit_text("**The link configuration has expired or been removed. Please contact admin.**")
+        
+        # Extract bot username from the Urban Links URL
+        bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
+        if not bot_username_match:
+            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
+        
+        urban_bot_username = bot_username_match.group(1)
+        
+        # Extract the start parameter from the Urban Links URL
+        start_param_match = re.search(r'\?start=(.+)', urban_link)
+        if not start_param_match:
+            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
+        
+        start_param = start_param_match.group(1)
+        
+        # Get user's session
+        user_session = await db.get_session(message.from_user.id)
+        if user_session is None:
+            return await wait_msg.edit_text(
+                "**You need to login first to generate links.**\n\n"
+                "Use `/login` to login with your account."
+            )
+        
+        try:
+            try:
+                await acc.get_chat(urban_bot_username)
+            except Exception as peer_err:
+                print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
+            
+            received_messages = []
+            handler_registered = False
+            
+            @acc.on_message(filters.user(urban_bot_username) & filters.private)
+            async def capture_response(client, msg):
+                received_messages.append(msg)
+            
+            handler_registered = True
+            
+            # Send the /start command
+            await acc.send_message(urban_bot_username, f"/start {start_param}")
+            
+            # Wait for messages with intelligent timeout
+            # Collect messages until we see 3 seconds of silence, max 15 seconds total
+            max_wait_time = 15.0
+            silence_threshold = 3.0
+            start_time = asyncio.get_event_loop().time()
+            last_message_count = 0
+            last_check_time = start_time
+            
+            while True:
+                current_time = asyncio.get_event_loop().time()
+                elapsed = current_time - start_time
+                
+                # Check if we have new messages since last check
+                current_message_count = len(received_messages)
+                time_since_last_check = current_time - last_check_time
+                
+                if current_message_count > last_message_count:
+                    # We got new messages, reset checks
+                    last_message_count = current_message_count
+                    last_check_time = current_time
+                    silence_time = 0
+                else:
+                    # No new messages, track silence time
+                    silence_time = current_time - last_check_time
+                
+                # Stop conditions:
+                # 1. We have messages AND we've had silence for threshold period
+                # 2. We've hit absolute max time
+                if (current_message_count > 0 and silence_time >= silence_threshold) or elapsed >= max_wait_time:
+                    break
+                
+                await asyncio.sleep(0.2)  # Check every 200ms
+            
+            # Process results
+            if not received_messages:
+                # Only show error if ZERO messages received
+                await wait_msg.edit_text("**No response received from link service. Please try again.**")
+            else:
+                for idx, response_msg in enumerate(received_messages):
                     try:
-                        await wait.delete()
-                    except:
-                        pass
-                    forwarded = True
-
-                # FORWARD SAME MESSAGE
-                if msg.text:
-                    await message.reply(msg.text, reply_markup=msg.reply_markup)
-                elif msg.photo:
-                    await message.reply_photo(
-                        msg.photo.file_id,
-                        caption=msg.caption,
-                        reply_markup=msg.reply_markup
-                    )
-                elif msg.document:
-                    await message.reply_document(
-                        msg.document.file_id,
-                        caption=msg.caption,
-                        reply_markup=msg.reply_markup
-                    )
-
-                # STOP AFTER BUTTON MESSAGE
-                if msg.reply_markup:
-                    return
-
-        if not forwarded:
-            await wait.edit_text("**No response received. Try again.**")
-
-    finally:
-        await acc.disconnect()
+                        if response_msg.text:
+                            if idx == 0:
+                                # First message: edit the wait message
+                                await wait_msg.edit_text(
+                                    response_msg.text,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                            else:
+                                # Subsequent messages: send as new message
+                                await message.reply(
+                                    response_msg.text,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                        elif response_msg.caption:
+                            # Handle media messages (photo, document, etc)
+                            if idx == 0:
+                                await wait_msg.delete()
+                            
+                            if response_msg.photo:
+                                await message.reply_photo(
+                                    response_msg.photo.file_id,
+                                    caption=response_msg.caption,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                            elif response_msg.document:
+                                await message.reply_document(
+                                    response_msg.document.file_id,
+                                    caption=response_msg.caption,
+                                    reply_markup=response_msg.reply_markup
+                                )
+                    except Exception as e:
+                        print(f"[v0] Error forwarding message {idx}: {str(e)}")
+            
+        except Exception as e:
+            print(f"[v0] Error generating link: {str(e)}")
+            await wait_msg.edit_text(f"**Error generating link:** {str(e)}")
+        
+        finally:
+            try:
+                await acc.disconnect()
+            except:
+                pass
+    
+    except Exception as e:
+        print(f"[v0] Error in generate_fresh_link: {str(e)}")
+        await message.reply("**An error occurred. Please try again.**")
