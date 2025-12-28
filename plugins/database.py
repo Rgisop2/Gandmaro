@@ -6,8 +6,8 @@ class Database:
     def __init__(self, uri, database_name):
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.db = self._client[database_name]
-        self.col = self.db.users
-        self.link_col = self.db.link_settings
+        self.users_col = self.db.users
+        self.links_col = self.db.links
 
     def new_user(self, id, name):
         return dict(
@@ -18,71 +18,37 @@ class Database:
     
     async def add_user(self, id, name):
         user = self.new_user(id, name)
-        await self.col.insert_one(user)
+        await self.users_col.insert_one(user)
     
     async def is_user_exist(self, id):
-        user = await self.col.find_one({'id':int(id)})
+        user = await self.users_col.find_one({'id': int(id)})
         return bool(user)
     
-    async def total_users_count(self):
-        count = await self.col.count_documents({})
-        return count
-
-    async def get_all_users(self):
-        return self.col.find({})
-
     async def delete_user(self, user_id):
-        await self.col.delete_many({'id': int(user_id)})
+        await self.users_col.delete_many({'id': int(user_id)})
 
-    async def set_session(self, id, session):
-        await self.col.update_one({'id': int(id)}, {'$set': {'session': session}})
+    async def set_session(self, admin_id, session):
+        await self.users_col.update_one({'id': int(admin_id)}, {'$set': {'session': session}}, upsert=True)
 
-    async def get_session(self, id):
-        user = await self.col.find_one({'id': int(id)})
-        return user['session']
+    async def get_session(self, admin_id):
+        user = await self.users_col.find_one({'id': int(admin_id)})
+        if user:
+            return user.get('session')
+        return None
 
-    async def add_urban_link(self, link):
-        """Store a new Urban Links bot link with unique ID"""
-        import uuid
-        link_id = str(uuid.uuid4())[:8]
-        await self.link_col.insert_one({
-            '_id': link_id,
-            'link': link,
-            'created_at': __import__('datetime').datetime.now()
-        })
-        return link_id
-
-    async def get_all_urban_links(self):
-        """Get all stored Urban Links bot links"""
-        links = []
-        async for doc in self.link_col.find({}):
-            links.append({'id': doc['_id'], 'link': doc['link']})
-        return links
-
-    async def get_urban_link_by_id(self, link_id):
-        """Get specific Urban Links bot link by ID"""
-        doc = await self.link_col.find_one({'_id': link_id})
-        return doc['link'] if doc else None
-
-    async def set_admin_user(self, admin_id):
-        """Set which user is the admin"""
-        await self.db.admin_settings.update_one(
-            {'_id': 'admin'},
-            {'$set': {'admin_id': int(admin_id)}},
+    async def save_link(self, unique_id, external_bot_link):
+        """Save external bot link with unique ID"""
+        await self.links_col.update_one(
+            {'unique_id': unique_id},
+            {'$set': {'external_bot_link': external_bot_link}},
             upsert=True
         )
 
-    async def get_admin_user(self):
-        """Get the admin user ID"""
-        doc = await self.db.admin_settings.find_one({'_id': 'admin'})
-        return doc['admin_id'] if doc else None
-
-    async def get_admin_session(self):
-        """Get the admin's session"""
-        admin_id = await self.get_admin_user()
-        if not admin_id:
-            return None
-        user = await self.col.find_one({'id': int(admin_id)})
-        return user['session'] if user else None
+    async def get_link(self, unique_id):
+        """Retrieve external bot link by unique ID"""
+        link_data = await self.links_col.find_one({'unique_id': unique_id})
+        if link_data:
+            return link_data.get('external_bot_link')
+        return None
 
 db = Database(DB_URI, DB_NAME)
