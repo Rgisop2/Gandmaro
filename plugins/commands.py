@@ -1,11 +1,11 @@
 import asyncio
 import uuid
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup
 from config import API_ID, API_HASH, ADMIN_ID
 from plugins.database import db
 
-# Store active relay sessions
+# Store active relay sessions with message timestamps
 active_relays = {}
 
 @Client.on_message(filters.command('start') & filters.private)
@@ -47,27 +47,44 @@ async def start_message(c, m):
             )
             await admin_client.connect()
             
-            # Create relay session tracking
             relay_session_id = str(uuid.uuid4())
+            relay_start_time = asyncio.get_event_loop().time()
             active_relays[relay_session_id] = {
                 'user_id': user_id,
                 'bot_username': bot_username,
                 'messages': [],
-                'created_at': asyncio.get_event_loop().time()
+                'final_message_found': False,
+                'start_time': relay_start_time
             }
             
             await m.reply("⏳ Fetching information from external bot...")
             
             @admin_client.on_message(filters.private & filters.user(bot_username))
             async def relay_handler(client, message):
-                if relay_session_id in active_relays:
-                    # Store message ID to avoid duplicates
-                    active_relays[relay_session_id]['messages'].append(message.id)
-                    
-                    try:
-                        await message.copy(chat_id=user_id)
-                    except Exception as e:
-                        print(f"[v0] Error forwarding message: {e}")
+                session = active_relays.get(relay_session_id)
+                if not session:
+                    return
+                
+                # Only capture messages sent AFTER /start was sent
+                message_time = message.date.timestamp() if hasattr(message.date, 'timestamp') else message.date
+                if message_time < relay_start_time:
+                    return
+                
+                has_inline_button = message.reply_markup and isinstance(message.reply_markup, InlineKeyboardMarkup)
+                is_final_message = "HERE IS YOUR LINK! CLICK BELOW TO PROCEED" in (message.text or "")
+                
+                # Store message
+                active_relays[relay_session_id]['messages'].append(message)
+                
+                try:
+                    await message.copy(chat_id=user_id)
+                except Exception as e:
+                    print(f"[v0] Error forwarding message: {e}")
+                
+                if is_final_message and has_inline_button:
+                    active_relays[relay_session_id]['final_message_found'] = True
+                    # Unregister handler to stop listening
+                    admin_client.remove_handler(relay_handler)
             
             # Send /start to external bot with parameter
             if start_param:
@@ -75,26 +92,17 @@ async def start_message(c, m):
             else:
                 await admin_client.send_message(bot_username, "/start")
             
-            # Wait for messages with timeout
-            timeout_seconds = 30  # Max 30 seconds to collect all messages
+            timeout_seconds = 30  # Max 30 seconds
             start_time = asyncio.get_event_loop().time()
-            last_message_time = start_time
             
-            # Keep waiting until timeout or no new messages for 3 seconds
             while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
-                current_message_count = len(active_relays[relay_session_id]['messages'])
-                
-                # If we have messages and haven't received new ones for 2 seconds, finish
-                if current_message_count > 0:
-                    current_time = asyncio.get_event_loop().time()
-                    if (current_time - last_message_time) > 2:
-                        break
-                    last_message_time = current_time
-                
-                await asyncio.sleep(0.5)
+                if active_relays[relay_session_id]['final_message_found']:
+                    break
+                await asyncio.sleep(0.1)
             
             # Cleanup
-            del active_relays[relay_session_id]
+            if relay_session_id in active_relays:
+                del active_relays[relay_session_id]
             await admin_client.disconnect()
             
         except Exception as e:
