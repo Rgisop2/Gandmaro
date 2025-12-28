@@ -5,6 +5,9 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import API_ID, API_HASH, ADMIN_ID
 from plugins.database import db
 
+# Store active relay sessions
+active_relays = {}
+
 @Client.on_message(filters.command('start') & filters.private)
 async def start_message(c, m):
     user_id = m.from_user.id
@@ -23,53 +26,81 @@ async def start_message(c, m):
         if not admin_session:
             return await m.reply("⚠️ Bot is not properly configured. Please try again later.")
         
+        # Extract start parameter and bot username from external bot link
+        bot_username = None
+        start_param = None
+        
+        if '?start=' in external_bot_link:
+            parts = external_bot_link.split('?start=')
+            bot_username = parts[0].replace('https://t.me/', '').strip('/')
+            start_param = parts[1]
+        else:
+            bot_username = external_bot_link.replace('https://t.me/', '').strip('/')
+        
         try:
             # Create admin client with saved session
             admin_client = Client(
                 ":memory:",
                 session_string=admin_session,
-                api_hash=API_HASH,
-                api_id=API_ID
+                api_id=API_ID,
+                api_hash=API_HASH
             )
             await admin_client.connect()
             
-            # Extract start parameter from external bot link
-            start_param = None
-            if '?start=' in external_bot_link:
-                start_param = external_bot_link.split('?start=')[1]
+            # Create relay session tracking
+            relay_session_id = str(uuid.uuid4())
+            active_relays[relay_session_id] = {
+                'user_id': user_id,
+                'bot_username': bot_username,
+                'messages': [],
+                'created_at': asyncio.get_event_loop().time()
+            }
+            
+            await m.reply("⏳ Fetching information from external bot...")
+            
+            @admin_client.on_message(filters.private & filters.user(bot_username))
+            async def relay_handler(client, message):
+                if relay_session_id in active_relays:
+                    # Store message ID to avoid duplicates
+                    active_relays[relay_session_id]['messages'].append(message.id)
+                    
+                    try:
+                        await message.copy(chat_id=user_id)
+                    except Exception as e:
+                        print(f"[v0] Error forwarding message: {e}")
             
             # Send /start to external bot with parameter
             if start_param:
-                await admin_client.send_message("me", f"/start {start_param}")
+                await admin_client.send_message(bot_username, f"/start {start_param}")
             else:
-                await admin_client.send_message("me", "/start")
+                await admin_client.send_message(bot_username, "/start")
             
-            # Listen for messages from external bot
-            await m.reply("⏳ Fetching information from external bot...")
-            
-            # Relay messages from external bot to user
-            collected_messages = []
-            timeout_seconds = 15  # Wait max 15 seconds for bot response
+            # Wait for messages with timeout
+            timeout_seconds = 30  # Max 30 seconds to collect all messages
             start_time = asyncio.get_event_loop().time()
+            last_message_time = start_time
             
-            # Keep listening for messages
+            # Keep waiting until timeout or no new messages for 3 seconds
             while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
-                try:
-                    # Get the last message from the external bot
-                    messages = await admin_client.get_chat_history("me", limit=1)
-                    for msg in messages:
-                        if msg.id not in collected_messages:
-                            collected_messages.append(msg.id)
-                            # Forward the message to user
-                            await msg.copy(chat_id=user_id)
-                except:
-                    pass
+                current_message_count = len(active_relays[relay_session_id]['messages'])
+                
+                # If we have messages and haven't received new ones for 2 seconds, finish
+                if current_message_count > 0:
+                    current_time = asyncio.get_event_loop().time()
+                    if (current_time - last_message_time) > 2:
+                        break
+                    last_message_time = current_time
                 
                 await asyncio.sleep(0.5)
             
+            # Cleanup
+            del active_relays[relay_session_id]
             await admin_client.disconnect()
             
         except Exception as e:
+            print(f"[v0] Relay error: {e}")
+            if relay_session_id in active_relays:
+                del active_relays[relay_session_id]
             await m.reply(f"❌ Error: {str(e)}")
     else:
         # Default /start message (no relay parameters)
