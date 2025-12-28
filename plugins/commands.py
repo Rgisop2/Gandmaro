@@ -7,6 +7,7 @@ from plugins.database import db
 
 # Store active relay sessions with message collection
 active_relays = {}
+relay_clients = {}
 
 async def relay_message_handler(client, message, relay_session_id):
     """Handler to capture messages from external bot"""
@@ -18,30 +19,33 @@ async def relay_message_handler(client, message, relay_session_id):
     if session['final_message_found']:
         return
     
-    # Check if message is from the external bot
-    if message.from_user.username != session['bot_username']:
-        return
+    # Check if message is from the external bot by username
+    sender_username = message.from_user.username if message.from_user else None
+    expected_username = session['bot_username']
     
-    # Only capture messages sent AFTER /start was sent (using message ID as proxy for timing)
-    if message.message_id < session['start_message_id']:
+    print(f"[v0] Relay: Message from @{sender_username}, expecting @{expected_username}")
+    
+    if sender_username != expected_username:
+        print(f"[v0] Relay: Skipping message (wrong sender)")
         return
     
     message_text = message.text or ""
     has_inline_button = message.reply_markup and isinstance(message.reply_markup, InlineKeyboardMarkup)
     is_final_message = "HERE IS YOUR LINK! CLICK BELOW TO PROCEED" in message_text
     
-    print(f"[v0] Relay: Captured message - text='{message_text[:50]}...' has_button={has_inline_button}")
+    print(f"[v0] Relay: Captured message - text='{message_text[:50]}...' has_button={has_inline_button} is_final={is_final_message}")
     
     # Forward message to user
     try:
-        await message.copy(chat_id=session['user_id'])
-        print(f"[v0] Relay: Forwarded message to user {session['user_id']}")
+        copied_msg = await message.copy(chat_id=session['user_id'])
+        print(f"[v0] Relay: Forwarded message to user {session['user_id']}, msg_id={copied_msg.message_id}")
     except Exception as e:
-        print(f"[v0] Relay: Error forwarding message: {e}")
+        print(f"[v0] Relay: Error forwarding message: {str(e)}")
+        return
     
     # Check if this is the final message
     if is_final_message and has_inline_button:
-        print(f"[v0] Relay: Found final message with button!")
+        print(f"[v0] Relay: FINAL MESSAGE FOUND - stopping listener!")
         session['final_message_found'] = True
 
 @Client.on_message(filters.command('start') & filters.private)
@@ -73,8 +77,11 @@ async def start_message(c, m):
         else:
             bot_username = external_bot_link.replace('https://t.me/', '').strip('/')
         
+        bot_username = bot_username.lstrip('@')
+        
         try:
-            # Create admin client with saved session
+            await m.reply("⏳ Fetching information from external bot...")
+            
             admin_client = Client(
                 ":memory:",
                 session_string=admin_session,
@@ -88,22 +95,22 @@ async def start_message(c, m):
             active_relays[relay_session_id] = {
                 'user_id': user_id,
                 'bot_username': bot_username,
-                'final_message_found': False,
-                'start_message_id': 0
+                'final_message_found': False
             }
             
-            await m.reply("⏳ Fetching information from external bot...")
+            # Store client reference
+            relay_clients[relay_session_id] = admin_client
             
             async def wrapped_handler(client, message):
                 await relay_message_handler(client, message, relay_session_id)
             
-            admin_client.add_handler(
-                (wrapped_handler, filters.private & filters.user(bot_username))
-            )
-            print(f"[v0] Relay: Handler registered for session {relay_session_id}")
+            # Register handler - use add_handler with proper filter
+            handler = (wrapped_handler, filters.private)
+            admin_client.add_handler(handler)
+            print(f"[v0] Relay: Handler registered for session {relay_session_id}, waiting for @{bot_username}")
             
             # Send /start to external bot with parameter
-            print(f"[v0] Relay: Sending /start {start_param} to {bot_username}")
+            print(f"[v0] Relay: Sending /start {start_param} to @{bot_username}")
             if start_param:
                 await admin_client.send_message(bot_username, f"/start {start_param}")
             else:
@@ -112,23 +119,34 @@ async def start_message(c, m):
             timeout_seconds = 30
             start_time = asyncio.get_event_loop().time()
             
+            # Wait for final message or timeout
             while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
                 if active_relays[relay_session_id]['final_message_found']:
                     print(f"[v0] Relay: Final message found, stopping listen")
                     break
-                await asyncio.sleep(0.2)  # Check every 200ms
+                await asyncio.sleep(0.2)
             
             print(f"[v0] Relay: Timeout or final message reached, disconnecting")
             
-            # Cleanup
-            if relay_session_id in active_relays:
-                del active_relays[relay_session_id]
+            admin_client.remove_handler(handler)
             await admin_client.disconnect()
             
-        except Exception as e:
-            print(f"[v0] Relay error: {e}")
+            # Cleanup session
             if relay_session_id in active_relays:
                 del active_relays[relay_session_id]
+            if relay_session_id in relay_clients:
+                del relay_clients[relay_session_id]
+            
+        except Exception as e:
+            print(f"[v0] Relay error: {str(e)}")
+            if relay_session_id in active_relays:
+                del active_relays[relay_session_id]
+            if relay_session_id in relay_clients:
+                try:
+                    await relay_clients[relay_session_id].disconnect()
+                except:
+                    pass
+                del relay_clients[relay_session_id]
             await m.reply(f"❌ Error: {str(e)}")
     else:
         # Default /start message (no relay parameters)
