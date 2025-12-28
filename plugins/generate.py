@@ -15,25 +15,33 @@ from pyrogram.errors import (
     SessionPasswordNeeded,
     PasswordHashInvalid
 )
-from config import API_ID, API_HASH
+from config import API_ID, API_HASH, ADMINS
 from plugins.database import db
 
 SESSION_STRING_SIZE = 351
 
 @Client.on_message(filters.private & ~filters.forwarded & filters.command(["logout"]))
 async def logout(client, message):
-    user_data = await db.get_session(message.from_user.id)  
-    if user_data is None:
-        return 
-    await db.set_session(message.from_user.id, session=None)  
-    await message.reply("**Logout Successfully** ♦")
+    if message.from_user.id != ADMINS:
+        return await message.reply("**Only admin can logout.**")
+    
+    admin_session = await db.get_admin_session()
+    if admin_session is None:
+        return await message.reply("**No admin session found.**")
+    
+    await db.set_admin_session(session=None)
+    await message.reply("**Admin session logged out successfully.**")
 
 @Client.on_message(filters.private & ~filters.forwarded & filters.command(["login"]))
 async def main(bot: Client, message: Message):
-    user_data = await db.get_session(message.from_user.id)
-    if user_data is not None:
-        await message.reply("**Your Are Already Logged In. First /logout Your Old Session. Then Do Login.**")
-        return 
+    if message.from_user.id != ADMINS:
+        return await message.reply("**Only admin can login. Normal users can directly use the bot without login.**")
+    
+    admin_session = await db.get_admin_session()
+    if admin_session is not None:
+        await message.reply("**Admin is already logged in. First /logout the admin session, then login again.**")
+        return
+    
     user_id = int(message.from_user.id)
     phone_number_msg = await bot.ask(chat_id=user_id, text="<b>Please send your phone number which includes country code</b>\n<b>Example:</b> <code>+13124562345, +9171828181889</code>")
     if phone_number_msg.text=='/cancel':
@@ -74,15 +82,13 @@ async def main(bot: Client, message: Message):
     if len(string_session) < SESSION_STRING_SIZE:
         return await message.reply('<b>invalid session sring</b>')
     try:
-        user_data = await db.get_session(message.from_user.id)
-        if user_data is None:
-            uclient = Client(":memory:", session_string=string_session, api_id=API_ID, api_hash=API_HASH)
-            await uclient.connect()
-            await db.set_session(message.from_user.id, session=string_session)
-            await db.set_admin_user(message.from_user.id)
+        uclient = Client(":memory:", session_string=string_session, api_id=API_ID, api_hash=API_HASH)
+        await uclient.connect()
+        await db.set_admin_session(session=string_session)
+        await uclient.disconnect()
     except Exception as e:
         return await message.reply_text(f"<b>ERROR IN LOGIN:</b> `{e}`")
-    await bot.send_message(message.from_user.id, "<b>Account Login Successfully.\n\nIf You Get Any Error Related To AUTH KEY Then /logout first and /login again</b>")
+    await bot.send_message(message.from_user.id, "<b>Admin Account Login Successfully.\n\nAll users will now use this session to generate links.\n\nIf you get any error related to AUTH KEY, /logout first and /login again.</b>")
 
 
 # Don't Remove Credit Tg - @VJ_Botz
