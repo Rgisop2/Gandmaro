@@ -1,196 +1,217 @@
 import asyncio
-import re
-from pyrogram import Client, filters, enums
-from config import LOG_CHANNEL, API_ID, API_HASH
-from plugins.database import db
+import uuid
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import API_ID, API_HASH, ADMIN_ID
+from plugins.database import db
 
-LOG_TEXT = """<b>#NewUser
-    
-ID - <code>{}</code>
-
-Nᴀᴍᴇ - {}</b>
-"""
-
-@Client.on_message(filters.command('start'))
+@Client.on_message(filters.command('start') & filters.private)
 async def start_message(c, m):
-    if not await db.is_user_exist(m.from_user.id):
-        await db.add_user(m.from_user.id, m.from_user.first_name)
-        await c.send_message(LOG_CHANNEL, LOG_TEXT.format(m.from_user.id, m.from_user.mention))
+    user_id = m.from_user.id
+    args = m.text.split()
     
-    args = m.command
+    # Check if user has start parameter (from generated link)
     if len(args) > 1 and args[1].startswith('generate_'):
-        # User clicked on a shared link with specific link ID
-        link_id = args[1].replace('generate_', '')
-        await generate_fresh_link(c, m, link_id)
-    else:
-        # Regular start message
-        await m.reply_photo(f"https://te.legra.ph/file/119729ea3cdce4fefb6a1.jpg",
-            caption=f"<b>Hello {m.from_user.mention} 👋\n\nI Am Link Generator Bot. I help you generate fresh join request links.\n\nShare my link with your users and they will get fresh links every time!</b>",
-            reply_markup=InlineKeyboardMarkup(
-                [[
-                    InlineKeyboardButton('💝 sᴜʙsᴄʀɪʙᴇ ʏᴏᴜᴛᴜʙᴇ ᴄʜᴀɴɴᴇʟ', url='https://youtube.com/@Tech_VJ')
-                ],[
-                    InlineKeyboardButton("❣️ ᴅᴇᴠᴇʟᴏᴘᴇʀ", url='https://t.me/Kingvj01'),
-                    InlineKeyboardButton("🤖 ᴜᴘᴅᴀᴛᴇ", url='https://t.me/VJ_Botz')
-                ]]
-            )
-        )
-
-
-@Client.on_message(filters.command('setlink') & filters.private)
-async def set_link(client, message):
-    try:
-        # Extract link from command
-        args = message.text.split(None, 1)
-        if len(args) < 2:
-            return await message.reply("**Usage:** `/setlink https://t.me/Urban_Links_bot?start=req_xxxxx`")
+        unique_id = args[1].replace('generate_', '')
+        external_bot_link = await db.get_link(unique_id)
         
-        urban_link = args[1].strip()
+        if not external_bot_link:
+            return await m.reply("❌ Link has expired or is invalid.")
         
-        # Validate it's a Telegram URL
-        if not urban_link.startswith('https://t.me/'):
-            return await message.reply("**Invalid link format. Please provide a valid Telegram bot link.**")
-        
-        link_id = await db.add_urban_link(urban_link)
-        
-        # Generate bot's own shareable link with unique ID
-        bot_me = await client.get_me()
-        bot_link = f"https://t.me/{bot_me.username}?start=generate_{link_id}"
-        
-        await message.reply(
-            f"**✅ Link has been saved successfully!**\n\n"
-            f"**Use this link to share with users:**\n\n"
-            f"`{bot_link}`",
-            disable_web_page_preview=True
-        )
-    except Exception as e:
-        await message.reply(f"**Error:** {str(e)}")
-
-async def generate_fresh_link(client, message, link_id):
-    """Generate fresh link using admin's session"""
-    try:
-        wait_msg = await message.reply("⏳ **Please wait...**")
-        
-        admin_session = await db.get_admin_session()
-        if admin_session is None:
-            return await wait_msg.edit_text(
-                "**Admin has not logged in yet.**\n\n"
-                "Please contact admin and ask them to use `/login` first."
-            )
-        
-        # Get stored Urban Links URL by ID
-        urban_link = await db.get_urban_link_by_id(link_id)
-        if not urban_link:
-            return await wait_msg.edit_text("**The link configuration has expired or been removed. Please contact admin.**")
-        
-        # Extract bot username from the Urban Links URL
-        bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
-        if not bot_username_match:
-            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
-        
-        urban_bot_username = bot_username_match.group(1)
-        
-        # Extract the start parameter from the Urban Links URL
-        start_param_match = re.search(r'\?start=(.+)', urban_link)
-        if not start_param_match:
-            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
-        
-        start_param = start_param_match.group(1)
-        
-        acc = Client(
-            name="admin_session",
-            session_string=admin_session,
-            api_id=API_ID,
-            api_hash=API_HASH
-        )
-        
-        received_messages = []
+        # Get admin session
+        admin_session = await db.get_session(ADMIN_ID)
+        if not admin_session:
+            return await m.reply("⚠️ Bot is not properly configured. Please try again later.")
         
         try:
-            await acc.connect()
+            # Create admin client with saved session
+            admin_client = Client(
+                ":memory:",
+                session_string=admin_session,
+                api_hash=API_HASH,
+                api_id=API_ID
+            )
+            await admin_client.connect()
             
-            try:
-                await acc.get_chat(urban_bot_username)
-            except Exception as e:
-                print(f"[v0] Could not fetch peer {urban_bot_username}: {str(e)}")
+            # Extract start parameter from external bot link
+            start_param = None
+            if '?start=' in external_bot_link:
+                start_param = external_bot_link.split('?start=')[1]
             
-            @acc.on_message(filters.user(urban_bot_username) & filters.private)
-            async def capture_response(aclient, msg):
-                received_messages.append(msg)
-            
-            # Send the /start command
-            await acc.send_message(urban_bot_username, f"/start {start_param}")
-            
-            max_wait_time = 15.0
-            silence_threshold = 3.0
-            start_time = asyncio.get_event_loop().time()
-            last_message_count = 0
-            last_check_time = start_time
-            
-            while True:
-                current_time = asyncio.get_event_loop().time()
-                elapsed = current_time - start_time
-                current_message_count = len(received_messages)
-                time_since_last_check = current_time - last_check_time
-                
-                if current_message_count > last_message_count:
-                    last_message_count = current_message_count
-                    last_check_time = current_time
-                    silence_time = 0
-                else:
-                    silence_time = current_time - last_check_time
-                
-                if (current_message_count > 0 and silence_time >= silence_threshold) or elapsed >= max_wait_time:
-                    break
-                
-                await asyncio.sleep(0.2)
-            
-            if not received_messages:
-                await wait_msg.edit_text("**No response received from link service. Please try again.**")
+            # Send /start to external bot with parameter
+            if start_param:
+                await admin_client.send_message("me", f"/start {start_param}")
             else:
-                for idx, response_msg in enumerate(received_messages):
-                    try:
-                        if response_msg.text:
-                            if idx == 0:
-                                await wait_msg.edit_text(
-                                    response_msg.text,
-                                    reply_markup=response_msg.reply_markup
-                                )
-                            else:
-                                await message.reply(
-                                    response_msg.text,
-                                    reply_markup=response_msg.reply_markup
-                                )
-                        elif response_msg.caption:
-                            if idx == 0:
-                                await wait_msg.delete()
-                            
-                            if response_msg.photo:
-                                await message.reply_photo(
-                                    response_msg.photo.file_id,
-                                    caption=response_msg.caption,
-                                    reply_markup=response_msg.reply_markup
-                                )
-                            elif response_msg.document:
-                                await message.reply_document(
-                                    response_msg.document.file_id,
-                                    caption=response_msg.caption,
-                                    reply_markup=response_msg.reply_markup
-                                )
-                    except Exception as e:
-                        print(f"[v0] Error forwarding message {idx}: {str(e)}")
-        
+                await admin_client.send_message("me", "/start")
+            
+            # Listen for messages from external bot
+            await m.reply("⏳ Fetching information from external bot...")
+            
+            # Relay messages from external bot to user
+            collected_messages = []
+            timeout_seconds = 15  # Wait max 15 seconds for bot response
+            start_time = asyncio.get_event_loop().time()
+            
+            # Keep listening for messages
+            while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
+                try:
+                    # Get the last message from the external bot
+                    messages = await admin_client.get_chat_history("me", limit=1)
+                    for msg in messages:
+                        if msg.id not in collected_messages:
+                            collected_messages.append(msg.id)
+                            # Forward the message to user
+                            await msg.copy(chat_id=user_id)
+                except:
+                    pass
+                
+                await asyncio.sleep(0.5)
+            
+            await admin_client.disconnect()
+            
         except Exception as e:
-            print(f"[v0] Error generating link: {str(e)}")
-            await wait_msg.edit_text(f"**Error:** {str(e)}")
-        
-        finally:
-            try:
-                await acc.disconnect()
-            except:
-                pass
+            await m.reply(f"❌ Error: {str(e)}")
+    else:
+        # Default /start message (no relay parameters)
+        await m.reply(
+            "<b>Welcome to Link Relay Bot! 👋</b>\n\n"
+            "This bot relays messages from external bots using admin account.\n\n"
+            "For admin commands: /login, /logout, /setlink"
+        )
+
+@Client.on_message(filters.command('login') & filters.private)
+async def login_handler(bot, message):
+    """Admin login with OTP and 2FA"""
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("❌ You are not authorized to use this command.")
     
+    # Check if already logged in
+    existing_session = await db.get_session(ADMIN_ID)
+    if existing_session:
+        return await message.reply("✅ Admin already logged in. Use /logout to switch accounts.")
+    
+    user_id = ADMIN_ID
+    
+    # Get phone number
+    phone_number_msg = await bot.ask(
+        chat_id=user_id,
+        text="<b>📱 Enter your phone number with country code</b>\n"
+             "<b>Example:</b> <code>+13124562345</code>\n\n"
+             "Send /cancel to abort."
+    )
+    
+    if phone_number_msg.text == '/cancel':
+        return await phone_number_msg.reply('❌ Login cancelled.')
+    
+    phone_number = phone_number_msg.text
+    client = Client(":memory:", API_ID, API_HASH)
+    
+    try:
+        await client.connect()
+        await phone_number_msg.reply("⏳ Sending OTP...")
+        
+        code = await client.send_code(phone_number)
+        
+        # Get OTP
+        phone_code_msg = await bot.ask(
+            user_id,
+            "<b>📝 Enter OTP</b>\n\n"
+            "If OTP is <code>12345</code>, send it as: <code>1 2 3 4 5</code>\n\n"
+            "Send /cancel to abort.",
+            filters=filters.text,
+            timeout=600
+        )
+        
+        if phone_code_msg.text == '/cancel':
+            await client.disconnect()
+            return await phone_code_msg.reply('❌ Login cancelled.')
+        
+        phone_code = phone_code_msg.text.replace(" ", "")
+        await client.sign_in(phone_number, code.phone_code_hash, phone_code)
+        
     except Exception as e:
-        print(f"[v0] Error in generate_fresh_link: {str(e)}")
-        await message.reply("**An error occurred. Please try again.**")
+        await client.disconnect()
+        return await message.reply(f"❌ OTP Error: {str(e)}")
+    
+    # Check for 2FA
+    try:
+        two_step_msg = await bot.ask(
+            user_id,
+            "<b>🔐 Two-step verification detected</b>\n\n"
+            "Enter your password:\n\n"
+            "Send /cancel to abort.",
+            filters=filters.text,
+            timeout=300
+        )
+        
+        if two_step_msg.text == '/cancel':
+            await client.disconnect()
+            return await two_step_msg.reply('❌ Login cancelled.')
+        
+        await client.check_password(password=two_step_msg.text)
+        
+    except:
+        pass  # No 2FA enabled
+    
+    # Save session
+    try:
+        session_string = await client.export_session_string()
+        await db.set_session(ADMIN_ID, session_string)
+        await client.disconnect()
+        
+        await message.reply(
+            "✅ <b>Admin login successful!</b>\n\n"
+            "Your session has been saved permanently.\n"
+            "Now use /setlink to set an external bot link."
+        )
+    except Exception as e:
+        await client.disconnect()
+        await message.reply(f"❌ Session save error: {str(e)}")
+
+@Client.on_message(filters.command('logout') & filters.private)
+async def logout_handler(bot, message):
+    """Admin logout"""
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("❌ You are not authorized.")
+    
+    await db.set_session(ADMIN_ID, None)
+    await message.reply("✅ Logged out successfully.")
+
+@Client.on_message(filters.command('setlink') & filters.private)
+async def setlink_handler(bot, message):
+    """Admin sets external bot link"""
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("❌ You are not authorized.")
+    
+    # Check admin session
+    admin_session = await db.get_session(ADMIN_ID)
+    if not admin_session:
+        return await message.reply("❌ You must /login first.")
+    
+    # Get external bot link
+    link_msg = await bot.ask(
+        message.from_user.id,
+        "<b>🔗 Enter external bot link</b>\n\n"
+        "<b>Example:</b> <code>https://t.me/Urban_Links_bot?start=req_xxxxx</code>"
+    )
+    
+    external_bot_link = link_msg.text
+    
+    if not external_bot_link.startswith('http'):
+        return await link_msg.reply("❌ Invalid URL format.")
+    
+    # Generate unique ID
+    unique_id = str(uuid.uuid4())[:8]
+    
+    # Save link
+    await db.save_link(unique_id, external_bot_link)
+    
+    # Get bot username
+    bot_me = await bot.get_me()
+    shareable_link = f"https://t.me/{bot_me.username}?start=generate_{unique_id}"
+    
+    await link_msg.reply(
+        "✅ <b>Link has been saved successfully!</b>\n\n"
+        "Use this link to share with users:\n\n"
+        f"<code>{shareable_link}</code>"
+    )
