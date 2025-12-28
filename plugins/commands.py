@@ -1,54 +1,37 @@
 import asyncio
 import uuid
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup
 from pyrogram.handlers import MessageHandler
 from config import API_ID, API_HASH, ADMIN_ID
 from plugins.database import db
 
 active_relays = {}
-relay_clients = {}
 
 # =========================
-# RELAY HANDLER (FIXED)
+# ADMIN -> BOT FORWARD HANDLER
 # =========================
-async def relay_message_handler(bot_client, admin_message, relay_session_id):
-    session = active_relays.get(relay_session_id)
-    if not session:
+@Client.on_message(filters.forwarded & filters.private)
+async def admin_forward_handler(bot, message):
+    """
+    Admin forwards messages from external bot to this bot.
+    Bot will resend them to waiting user.
+    """
+    if message.from_user.id != ADMIN_ID:
         return
+
+    relay = active_relays.get(ADMIN_ID)
+    if not relay:
+        return
+
+    user_id = relay["user_id"]
 
     try:
-        # ✅ SEND USING BOT CLIENT (NOT USER ACCOUNT)
-        if admin_message.text:
-            await bot_client.send_message(
-                session["user_id"],
-                admin_message.text,
-                reply_markup=admin_message.reply_markup
-            )
-
-        elif admin_message.caption:
-            if admin_message.photo:
-                await bot_client.send_photo(
-                    session["user_id"],
-                    admin_message.photo.file_id,
-                    caption=admin_message.caption,
-                    reply_markup=admin_message.reply_markup
-                )
-            elif admin_message.document:
-                await bot_client.send_document(
-                    session["user_id"],
-                    admin_message.document.file_id,
-                    caption=admin_message.caption,
-                    reply_markup=admin_message.reply_markup
-                )
-
-        print(f"[v0] Relay: Delivered message to user {session['user_id']}")
-
+        # Forward from admin -> user (bot sending)
+        await message.copy(chat_id=user_id)
+        relay["last_message_time"] = asyncio.get_event_loop().time()
+        print(f"[v0] Bot forwarded admin message to user {user_id}")
     except Exception as e:
-        print(f"[v0] Relay send error: {e}")
-        return
-
-    session["last_message_time"] = asyncio.get_event_loop().time()
+        print(f"[v0] Forward error: {e}")
 
 
 # =========================
@@ -72,8 +55,15 @@ async def start_handler(bot, message):
         bot_username = external_link.split("?")[0].replace("https://t.me/", "").strip("/")
         start_param = external_link.split("?start=")[1] if "?start=" in external_link else None
 
-        await message.reply("⏳ Fetching information from external bot...")
+        await message.reply("⏳ Please wait...")
 
+        # Save waiting user
+        active_relays[ADMIN_ID] = {
+            "user_id": message.from_user.id,
+            "last_message_time": asyncio.get_event_loop().time()
+        }
+
+        # Admin user client
         admin_client = Client(
             ":memory:",
             session_string=admin_session,
@@ -82,51 +72,34 @@ async def start_handler(bot, message):
         )
         await admin_client.connect()
 
-        relay_id = str(uuid.uuid4())
-        active_relays[relay_id] = {
-            "user_id": message.from_user.id,
-            "last_message_time": asyncio.get_event_loop().time()
-        }
-        relay_clients[relay_id] = admin_client
-
-        async def wrapped(admin_client, admin_msg):
-            await relay_message_handler(bot, admin_msg, relay_id)
-
-        handler = MessageHandler(wrapped, filters.private)
-        admin_client.add_handler(handler)
-
-        # SEND START TO EXTERNAL BOT
+        # Send /start to external bot
         if start_param:
             await admin_client.send_message(bot_username, f"/start {start_param}")
         else:
             await admin_client.send_message(bot_username, "/start")
 
-        # WAIT & RELAY EVERYTHING
-        timeout = 30
-        idle = 4
+        # Wait while admin forwards messages
+        timeout = 60
+        idle = 5
         start_time = asyncio.get_event_loop().time()
 
         while asyncio.get_event_loop().time() - start_time < timeout:
-            if asyncio.get_event_loop().time() - active_relays[relay_id]["last_message_time"] > idle:
+            if asyncio.get_event_loop().time() - active_relays[ADMIN_ID]["last_message_time"] > idle:
                 break
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.3)
 
-        admin_client.remove_handler(handler)
         await admin_client.disconnect()
-        active_relays.pop(relay_id, None)
-        relay_clients.pop(relay_id, None)
+        active_relays.pop(ADMIN_ID, None)
 
     else:
         await message.reply(
             "<b>Welcome to Link Relay Bot 👋</b>\n\n"
-            "Use shared links to get join request buttons.\n\n"
-            "Admin commands:\n"
-            "/login\n/setlink\n/logout"
+            "Use the shared link to get your join request button."
         )
 
 
 # =========================
-# LOGIN / LOGOUT / SETLINK
+# LOGIN
 # =========================
 @Client.on_message(filters.command("login") & filters.private)
 async def login_handler(bot, message):
@@ -134,13 +107,13 @@ async def login_handler(bot, message):
         return await message.reply("❌ Unauthorized.")
 
     if await db.get_session(ADMIN_ID):
-        return await message.reply("Already logged in. Use /logout first.")
+        return await message.reply("Already logged in.")
 
     phone = await bot.ask(message.chat.id, "Send phone number with country code")
     client = Client(":memory:", API_ID, API_HASH)
     await client.connect()
-    sent = await client.send_code(phone.text)
 
+    sent = await client.send_code(phone.text)
     code = await bot.ask(message.chat.id, "Send OTP (space separated)")
     await client.sign_in(phone.text, sent.phone_code_hash, code.text.replace(" ", ""))
 
@@ -153,9 +126,13 @@ async def login_handler(bot, message):
     session = await client.export_session_string()
     await db.set_session(ADMIN_ID, session)
     await client.disconnect()
+
     await message.reply("✅ Admin logged in successfully.")
 
 
+# =========================
+# LOGOUT
+# =========================
 @Client.on_message(filters.command("logout") & filters.private)
 async def logout_handler(bot, message):
     if message.from_user.id != ADMIN_ID:
@@ -164,6 +141,9 @@ async def logout_handler(bot, message):
     await message.reply("✅ Logged out.")
 
 
+# =========================
+# SETLINK
+# =========================
 @Client.on_message(filters.command("setlink") & filters.private)
 async def setlink_handler(bot, message):
     if message.from_user.id != ADMIN_ID:
