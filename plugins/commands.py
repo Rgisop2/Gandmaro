@@ -89,16 +89,16 @@ async def generate_fresh_link(client, message, link_id):
         
         start_param = start_param_match.group(1)
         
-        user_session = await db.get_session(message.from_user.id)
-        if user_session is None:
+        admin_session = await db.get_admin_session()
+        if admin_session is None:
             return await wait_msg.edit_text(
-                "**You need to login first to generate links.**\n\n"
-                "Use `/login` to login with your account."
+                "**Admin has not logged in yet. Please contact the bot administrator to complete setup.**\n\n"
+                "Admin needs to use `/login` to authenticate."
             )
         
         uclient = None
         try:
-            uclient = Client(":memory:", session_string=user_session, api_id=API_ID, api_hash=API_HASH)
+            uclient = Client(":memory:", session_string=admin_session, api_id=API_ID, api_hash=API_HASH)
             await uclient.connect()
             
             try:
