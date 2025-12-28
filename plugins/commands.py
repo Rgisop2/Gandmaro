@@ -6,286 +6,182 @@ from pyrogram.handlers import MessageHandler
 from config import API_ID, API_HASH, ADMIN_ID
 from plugins.database import db
 
-# Store active relay sessions with message collection
 active_relays = {}
 relay_clients = {}
 
-async def relay_message_handler(client, message, relay_session_id):
-    """Handler to capture messages from external bot"""
+# =========================
+# RELAY HANDLER (FIXED)
+# =========================
+async def relay_message_handler(bot_client, admin_message, relay_session_id):
     session = active_relays.get(relay_session_id)
     if not session:
-        print(f"[v0] Relay: Session {relay_session_id} not found")
         return
-    
-    sender_username = message.from_user.username if message.from_user else None
-    expected_username = session['bot_username']
-    
-    print(f"[v0] Relay: Captured message from @{sender_username}, expecting @{expected_username}")
-    
-    if sender_username != expected_username:
-        print(f"[v0] Relay: Skipping - wrong sender")
-        return
-    
-    try:
-        await message.copy(chat_id=session['user_id'])
-        print(f"[v0] Relay: ✓ Forwarded to user {session['user_id']}")
-    except Exception as e:
-        print(f"[v0] Relay: Error forwarding - {str(e)}")
-        return
-    
-    session['last_message_time'] = asyncio.get_event_loop().time()
-    
-    message_text = message.text or ""
-    has_button = message.reply_markup and isinstance(message.reply_markup, InlineKeyboardMarkup)
-    
-    if "HERE IS YOUR LINK! CLICK BELOW TO PROCEED" in message_text and has_button:
-        print(f"[v0] Relay: FINAL MESSAGE detected - stopping")
-        session['stop_listening'] = True
 
-@Client.on_message(filters.command('start') & filters.private)
-async def start_message(c, m):
-    user_id = m.from_user.id
-    args = m.text.split()
-    
-    # Check if user has start parameter (from generated link)
-    if len(args) > 1 and args[1].startswith('generate_'):
-        unique_id = args[1].replace('generate_', '')
-        external_bot_link = await db.get_link(unique_id)
-        
-        if not external_bot_link:
-            return await m.reply("❌ Link has expired or is invalid.")
-        
-        # Get admin session
+    try:
+        # ✅ SEND USING BOT CLIENT (NOT USER ACCOUNT)
+        if admin_message.text:
+            await bot_client.send_message(
+                session["user_id"],
+                admin_message.text,
+                reply_markup=admin_message.reply_markup
+            )
+
+        elif admin_message.caption:
+            if admin_message.photo:
+                await bot_client.send_photo(
+                    session["user_id"],
+                    admin_message.photo.file_id,
+                    caption=admin_message.caption,
+                    reply_markup=admin_message.reply_markup
+                )
+            elif admin_message.document:
+                await bot_client.send_document(
+                    session["user_id"],
+                    admin_message.document.file_id,
+                    caption=admin_message.caption,
+                    reply_markup=admin_message.reply_markup
+                )
+
+        print(f"[v0] Relay: Delivered message to user {session['user_id']}")
+
+    except Exception as e:
+        print(f"[v0] Relay send error: {e}")
+        return
+
+    session["last_message_time"] = asyncio.get_event_loop().time()
+
+
+# =========================
+# START HANDLER
+# =========================
+@Client.on_message(filters.command("start") & filters.private)
+async def start_handler(bot, message):
+    args = message.text.split()
+
+    if len(args) > 1 and args[1].startswith("generate_"):
+        uid = args[1].replace("generate_", "")
+        external_link = await db.get_link(uid)
+
+        if not external_link:
+            return await message.reply("❌ Link expired or invalid.")
+
         admin_session = await db.get_session(ADMIN_ID)
         if not admin_session:
-            return await m.reply("⚠️ Bot is not properly configured. Please try again later.")
-        
-        # Extract start parameter and bot username from external bot link
-        bot_username = None
-        start_param = None
-        
-        if '?start=' in external_bot_link:
-            parts = external_bot_link.split('?start=')
-            bot_username = parts[0].replace('https://t.me/', '').strip('/')
-            start_param = parts[1]
+            return await message.reply("❌ Admin not logged in.")
+
+        bot_username = external_link.split("?")[0].replace("https://t.me/", "").strip("/")
+        start_param = external_link.split("?start=")[1] if "?start=" in external_link else None
+
+        await message.reply("⏳ Fetching information from external bot...")
+
+        admin_client = Client(
+            ":memory:",
+            session_string=admin_session,
+            api_id=API_ID,
+            api_hash=API_HASH
+        )
+        await admin_client.connect()
+
+        relay_id = str(uuid.uuid4())
+        active_relays[relay_id] = {
+            "user_id": message.from_user.id,
+            "last_message_time": asyncio.get_event_loop().time()
+        }
+        relay_clients[relay_id] = admin_client
+
+        async def wrapped(admin_client, admin_msg):
+            await relay_message_handler(bot, admin_msg, relay_id)
+
+        handler = MessageHandler(wrapped, filters.private)
+        admin_client.add_handler(handler)
+
+        # SEND START TO EXTERNAL BOT
+        if start_param:
+            await admin_client.send_message(bot_username, f"/start {start_param}")
         else:
-            bot_username = external_bot_link.replace('https://t.me/', '').strip('/')
-        
-        bot_username = bot_username.lstrip('@')
-        
-        try:
-            await m.reply("⏳ Fetching information from external bot...")
-            
-            admin_client = Client(
-                ":memory:",
-                session_string=admin_session,
-                api_id=API_ID,
-                api_hash=API_HASH
-            )
-            await admin_client.connect()
-            
-            relay_session_id = str(uuid.uuid4())
-            
-            active_relays[relay_session_id] = {
-                'user_id': m.from_user.id,
-                'bot_username': bot_username,
-                'stop_listening': False,
-                'last_message_time': asyncio.get_event_loop().time(),
-                'client': admin_client
-            }
-            
-            relay_clients[relay_session_id] = admin_client
-            
-            async def wrapped_handler(client, message):
-                await relay_message_handler(client, message, relay_session_id)
-            
-            handler = MessageHandler(wrapped_handler, filters.private)
-            admin_client.add_handler(handler)
-            print(f"[v0] Relay: Handler registered for @{bot_username}")
-            
-            print(f"[v0] Relay: Sending /start {start_param} to @{bot_username}")
-            if start_param:
-                await admin_client.send_message(bot_username, f"/start {start_param}")
-            else:
-                await admin_client.send_message(bot_username, "/start")
-            
-            timeout_seconds = 30
-            idle_timeout = 3
-            start_time = asyncio.get_event_loop().time()
-            
-            while (asyncio.get_event_loop().time() - start_time) < timeout_seconds:
-                if active_relays[relay_session_id]['stop_listening']:
-                    print(f"[v0] Relay: Final message received, stopping")
-                    break
-                
-                # Check if no messages for 3 seconds
-                time_since_last_msg = asyncio.get_event_loop().time() - active_relays[relay_session_id]['last_message_time']
-                if time_since_last_msg > idle_timeout and active_relays[relay_session_id]['last_message_time'] != start_time:
-                    print(f"[v0] Relay: No activity for {idle_timeout}s, stopping")
-                    break
-                
-                await asyncio.sleep(0.1)
-            
-            print(f"[v0] Relay: Disconnecting client")
-            admin_client.remove_handler(handler)
-            await admin_client.disconnect()
-            
-            if relay_session_id in active_relays:
-                del active_relays[relay_session_id]
-            if relay_session_id in relay_clients:
-                del relay_clients[relay_session_id]
-            
-        except Exception as e:
-            print(f"[v0] Relay error: {str(e)}")
-            if relay_session_id in active_relays:
-                del active_relays[relay_session_id]
-            if relay_session_id in relay_clients:
-                try:
-                    await relay_clients[relay_session_id].disconnect()
-                except:
-                    pass
-                del relay_clients[relay_session_id]
-            await m.reply(f"❌ Error: {str(e)}")
+            await admin_client.send_message(bot_username, "/start")
+
+        # WAIT & RELAY EVERYTHING
+        timeout = 30
+        idle = 4
+        start_time = asyncio.get_event_loop().time()
+
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            if asyncio.get_event_loop().time() - active_relays[relay_id]["last_message_time"] > idle:
+                break
+            await asyncio.sleep(0.2)
+
+        admin_client.remove_handler(handler)
+        await admin_client.disconnect()
+        active_relays.pop(relay_id, None)
+        relay_clients.pop(relay_id, None)
+
     else:
-        await m.reply(
-            "<b>Welcome to Link Relay Bot! 👋</b>\n\n"
-            "This bot relays messages from external bots using admin account.\n\n"
-            "For admin commands: /login, /logout, /setlink"
-        )
-
-@Client.on_message(filters.command('login') & filters.private)
-async def login_handler(bot, message):
-    """Admin login with OTP and 2FA"""
-    if message.from_user.id != ADMIN_ID:
-        return await message.reply("❌ You are not authorized to use this command.")
-    
-    # Check if already logged in
-    existing_session = await db.get_session(ADMIN_ID)
-    if existing_session:
-        return await message.reply("✅ Admin already logged in. Use /logout to switch accounts.")
-    
-    user_id = ADMIN_ID
-    
-    # Get phone number
-    phone_number_msg = await bot.ask(
-        chat_id=user_id,
-        text="<b>📱 Enter your phone number with country code</b>\n"
-             "<b>Example:</b> <code>+13124562345</code>\n\n"
-             "Send /cancel to abort."
-    )
-    
-    if phone_number_msg.text == '/cancel':
-        return await phone_number_msg.reply('❌ Login cancelled.')
-    
-    phone_number = phone_number_msg.text
-    client = Client(":memory:", API_ID, API_HASH)
-    
-    try:
-        await client.connect()
-        await phone_number_msg.reply("⏳ Sending OTP...")
-        
-        code = await client.send_code(phone_number)
-        
-        # Get OTP
-        phone_code_msg = await bot.ask(
-            user_id,
-            "<b>📝 Enter OTP</b>\n\n"
-            "If OTP is <code>12345</code>, send it as: <code>1 2 3 4 5</code>\n\n"
-            "Send /cancel to abort.",
-            filters=filters.text,
-            timeout=600
-        )
-        
-        if phone_code_msg.text == '/cancel':
-            await client.disconnect()
-            return await phone_code_msg.reply('❌ Login cancelled.')
-        
-        phone_code = phone_code_msg.text.replace(" ", "")
-        await client.sign_in(phone_number, code.phone_code_hash, phone_code)
-        
-    except Exception as e:
-        await client.disconnect()
-        return await message.reply(f"❌ OTP Error: {str(e)}")
-    
-    # Check for 2FA
-    try:
-        two_step_msg = await bot.ask(
-            user_id,
-            "<b>🔐 Two-step verification detected</b>\n\n"
-            "Enter your password:\n\n"
-            "Send /cancel to abort.",
-            filters=filters.text,
-            timeout=300
-        )
-        
-        if two_step_msg.text == '/cancel':
-            await client.disconnect()
-            return await two_step_msg.reply('❌ Login cancelled.')
-        
-        await client.check_password(password=two_step_msg.text)
-        
-    except:
-        pass  # No 2FA enabled
-    
-    # Save session
-    try:
-        session_string = await client.export_session_string()
-        await db.set_session(ADMIN_ID, session_string)
-        await client.disconnect()
-        
         await message.reply(
-            "✅ <b>Admin login successful!</b>\n\n"
-            "Your session has been saved permanently.\n"
-            "Now use /setlink to set an external bot link."
+            "<b>Welcome to Link Relay Bot 👋</b>\n\n"
+            "Use shared links to get join request buttons.\n\n"
+            "Admin commands:\n"
+            "/login\n/setlink\n/logout"
         )
-    except Exception as e:
-        await client.disconnect()
-        await message.reply(f"❌ Session save error: {str(e)}")
 
-@Client.on_message(filters.command('logout') & filters.private)
+
+# =========================
+# LOGIN / LOGOUT / SETLINK
+# =========================
+@Client.on_message(filters.command("login") & filters.private)
+async def login_handler(bot, message):
+    if message.from_user.id != ADMIN_ID:
+        return await message.reply("❌ Unauthorized.")
+
+    if await db.get_session(ADMIN_ID):
+        return await message.reply("Already logged in. Use /logout first.")
+
+    phone = await bot.ask(message.chat.id, "Send phone number with country code")
+    client = Client(":memory:", API_ID, API_HASH)
+    await client.connect()
+    sent = await client.send_code(phone.text)
+
+    code = await bot.ask(message.chat.id, "Send OTP (space separated)")
+    await client.sign_in(phone.text, sent.phone_code_hash, code.text.replace(" ", ""))
+
+    try:
+        pwd = await bot.ask(message.chat.id, "Enter 2FA password")
+        await client.check_password(pwd.text)
+    except:
+        pass
+
+    session = await client.export_session_string()
+    await db.set_session(ADMIN_ID, session)
+    await client.disconnect()
+    await message.reply("✅ Admin logged in successfully.")
+
+
+@Client.on_message(filters.command("logout") & filters.private)
 async def logout_handler(bot, message):
-    """Admin logout"""
     if message.from_user.id != ADMIN_ID:
-        return await message.reply("❌ You are not authorized.")
-    
+        return
     await db.set_session(ADMIN_ID, None)
-    await message.reply("✅ Logged out successfully.")
+    await message.reply("✅ Logged out.")
 
-@Client.on_message(filters.command('setlink') & filters.private)
+
+@Client.on_message(filters.command("setlink") & filters.private)
 async def setlink_handler(bot, message):
-    """Admin sets external bot link"""
     if message.from_user.id != ADMIN_ID:
-        return await message.reply("❌ You are not authorized.")
-    
-    # Check admin session
-    admin_session = await db.get_session(ADMIN_ID)
-    if not admin_session:
-        return await message.reply("❌ You must /login first.")
-    
-    # Get external bot link
+        return
+
+    if not await db.get_session(ADMIN_ID):
+        return await message.reply("❌ Login first.")
+
     link_msg = await bot.ask(
-        message.from_user.id,
-        "<b>🔗 Enter external bot link</b>\n\n"
-        "<b>Example:</b> <code>https://t.me/Urban_Links_bot?start=req_xxxxx</code>"
+        message.chat.id,
+        "Send external bot link\nExample:\nhttps://t.me/Urban_Links_bot?start=req_xxxx"
     )
-    
-    external_bot_link = link_msg.text
-    
-    if not external_bot_link.startswith('http'):
-        return await link_msg.reply("❌ Invalid URL format.")
-    
-    # Generate unique ID
-    unique_id = str(uuid.uuid4())[:8]
-    
-    # Save link
-    await db.save_link(unique_id, external_bot_link)
-    
-    # Get bot username
-    bot_me = await bot.get_me()
-    shareable_link = f"https://t.me/{bot_me.username}?start=generate_{unique_id}"
-    
+
+    uid = str(uuid.uuid4())[:8]
+    await db.save_link(uid, link_msg.text)
+
+    me = await bot.get_me()
     await link_msg.reply(
-        "✅ <b>Link has been saved successfully!</b>\n\n"
-        "Use this link to share with users:\n\n"
-        f"<code>{shareable_link}</code>"
+        f"✅ Link saved\n\n"
+        f"https://t.me/{me.username}?start=generate_{uid}"
     )
