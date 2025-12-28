@@ -5,7 +5,7 @@ class Bot(Client):
 
     def __init__(self):
         super().__init__(
-        "vj join request bot",
+        "vj link relay bot",
          api_id=API_ID,
          api_hash=API_HASH,
          bot_token=BOT_TOKEN,
@@ -21,12 +21,12 @@ class Bot(Client):
         me = await self.get_me()
         self.username = '@' + me.username
             
-        print('Bot Started Powered By @VJ_Botz')
+        print('Link Relay Bot Started - Powered By @VJ_Botz')
 
 
     async def stop(self, *args):
 
         await super().stop()
-        print('Bot Stopped Bye')
+        print('Link Relay Bot Stopped')
 
 Bot().run()
