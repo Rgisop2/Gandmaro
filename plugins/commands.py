@@ -99,16 +99,16 @@ async def generate_fresh_link(client, message, link_id):
         
         try:
             try:
-                await acc.get_chat(urban_bot_username)
+                await client.get_chat(urban_bot_username)
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
             
             # This ensures we only process messages that arrive AFTER our command
             last_msg_id = 0
-            async for last_msg in acc.get_chat_history(urban_bot_username, limit=1):
+            async for last_msg in client.get_chat_history(urban_bot_username, limit=1):
                 last_msg_id = last_msg.id
             
-            await acc.send_message(urban_bot_username, f"/start {start_param}")
+            await client.send_message(urban_bot_username, f"/start {start_param}")
             
             # We need to listen for messages until we get one with inline buttons (reply_markup)
             messages_received = []
@@ -116,7 +116,7 @@ async def generate_fresh_link(client, message, link_id):
             start_time = asyncio.get_event_loop().time()
             last_message_time = start_time
             
-            async for msg in acc.get_chat_history(urban_bot_username, limit=10):
+            async for msg in client.get_chat_history(urban_bot_username, limit=10):
                 # Only process messages from the bot that are NEWER than the last message ID
                 if msg.id > last_msg_id and msg.from_user and msg.from_user.username == urban_bot_username:
                     messages_received.append(msg)
@@ -133,7 +133,7 @@ async def generate_fresh_link(client, message, link_id):
             
             if not messages_received:
                 await asyncio.sleep(2)
-                async for msg in acc.get_chat_history(urban_bot_username, limit=10):
+                async for msg in client.get_chat_history(urban_bot_username, limit=10):
                     if msg.id > last_msg_id and msg.from_user and msg.from_user.username == urban_bot_username:
                         messages_received.append(msg)
             
@@ -200,7 +200,7 @@ async def generate_fresh_link(client, message, link_id):
         
         finally:
             try:
-                await acc.disconnect()
+                await client.disconnect()
             except:
                 pass
     
