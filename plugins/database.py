@@ -8,6 +8,8 @@ class Database:
         self.db = self._client[database_name]
         self.col = self.db.users
         self.link_col = self.db.link_settings
+        # <CHANGE> Added admin_col for storing single admin session
+        self.admin_col = self.db.admin_session
 
     def new_user(self, id, name):
         return dict(
@@ -40,6 +42,20 @@ class Database:
     async def get_session(self, id):
         user = await self.col.find_one({'id': int(id)})
         return user['session']
+    
+    # <CHANGE> Added admin-only session methods
+    async def set_admin_session(self, session):
+        """Store the single admin session string"""
+        await self.admin_col.update_one(
+            {'_id': 'admin'},
+            {'$set': {'session': session}},
+            upsert=True
+        )
+    
+    async def get_admin_session(self):
+        """Retrieve the single admin session string"""
+        admin = await self.admin_col.find_one({'_id': 'admin'})
+        return admin['session'] if admin else None
 
     async def add_urban_link(self, link):
         """Store a new Urban Links bot link with unique ID"""
