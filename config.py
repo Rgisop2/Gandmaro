@@ -6,6 +6,8 @@ BOT_TOKEN = environ.get("BOT_TOKEN", "8298659033:AAGnS9bKVidzKOISev_Ek9GCQqFM0Ny
 
 ADMIN_ID = int(environ.get("ADMIN_ID", "1327021082"))
 
+ADMINS = int(environ.get("ADMINS", "1327021082"))
+
 # Warning - Give Db uri in deploy server environment variable, don't give in repo.
 DB_URI = environ.get("DB_URI", "mongodb+srv://poulomig644_db_user:d9MMUd5PsTP5MDFf@cluster0.q5evcku.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 DB_NAME = environ.get("DB_NAME", "vjjoinrequetbot")
