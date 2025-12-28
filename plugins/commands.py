@@ -98,17 +98,15 @@ async def generate_fresh_link(client, message, link_id):
             )
         
         try:
-            # Create client with user session
-            acc = Client("user_client", session_string=user_session, api_hash=API_HASH, api_id=API_ID)
-            await acc.connect()
-        except:
-            return await wait_msg.edit_text("**Your login session expired. Use `/logout` then `/login` again.**")
-        
-        try:
             try:
                 await acc.get_chat(urban_bot_username)
             except Exception as peer_err:
                 print(f"[v0] Could not fetch peer {urban_bot_username}: {str(peer_err)}")
+            
+            # This ensures we only process messages that arrive AFTER our command
+            last_msg_id = 0
+            async for last_msg in acc.get_chat_history(urban_bot_username, limit=1):
+                last_msg_id = last_msg.id
             
             await acc.send_message(urban_bot_username, f"/start {start_param}")
             
@@ -119,13 +117,14 @@ async def generate_fresh_link(client, message, link_id):
             last_message_time = start_time
             
             async for msg in acc.get_chat_history(urban_bot_username, limit=10):
-                if msg.from_user and msg.from_user.username == urban_bot_username:
+                # Only process messages from the bot that are NEWER than the last message ID
+                if msg.id > last_msg_id and msg.from_user and msg.from_user.username == urban_bot_username:
                     messages_received.append(msg)
                     last_message_time = asyncio.get_event_loop().time()
                     
                     # Check if this message has inline buttons (reply_markup)
                     if msg.reply_markup:
-                        print(f"[v0] Found message with reply_markup: {msg.text}")
+                        print(f"[v0] Found fresh message with reply_markup: {msg.text}")
                         break
                     
                     # Timeout if no new messages for 3 seconds
@@ -135,7 +134,7 @@ async def generate_fresh_link(client, message, link_id):
             if not messages_received:
                 await asyncio.sleep(2)
                 async for msg in acc.get_chat_history(urban_bot_username, limit=10):
-                    if msg.from_user and msg.from_user.username == urban_bot_username:
+                    if msg.id > last_msg_id and msg.from_user and msg.from_user.username == urban_bot_username:
                         messages_received.append(msg)
             
             if messages_received:
