@@ -111,19 +111,34 @@ async def generate_fresh_link(client, message, link_id):
         if not urban_link:
             return await wait_msg.edit_text("**The link configuration has expired or been removed.**")
         
-        # Extract bot username from the Urban Links URL
-        bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
-        if not bot_username_match:
-            return await wait_msg.edit_text("**Invalid link configuration.**")
-        
-        urban_bot_username = bot_username_match.group(1).lower()
-        
-        # Extract the start parameter from the Urban Links URL
         start_param_match = re.search(r'\?start=(.+)', urban_link)
-        if not start_param_match:
-            start_param = None
+        is_pub_link = start_param_match is None
+        
+        if is_pub_link:
+            # For /pub links, we need to send the channel link to the configured Urban Bot
+            # Try to find the target bot from other stored links, or use fallback
+            all_links = await db.get_all_urban_links()
+            target_bot = "Urban_Links_bot"
+            for l_data in reversed(all_links):
+                l = l_data['link']
+                if "?start=" in l:
+                    m = re.search(r'https://t\.me/(\w+)', l)
+                    if m:
+                        target_bot = m.group(1).lower()
+                        break
+            
+            urban_bot_username = target_bot
+            message_to_send = urban_link
+            print(f"[v0] Handling /pub link. Sending channel link {urban_link} to bot {urban_bot_username}")
         else:
+            bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
+            if not bot_username_match:
+                return await wait_msg.edit_text("**Invalid link configuration.**")
+            
+            urban_bot_username = bot_username_match.group(1).lower()
             start_param = start_param_match.group(1)
+            message_to_send = f"/start {start_param}"
+            print(f"[v0] Handling /setlink. Sending /start {start_param} to bot {urban_bot_username}")
         
         admin_session = await db.get_admin_session()
         if admin_session is None:
@@ -147,8 +162,7 @@ async def generate_fresh_link(client, message, link_id):
             async for last_msg in uclient.get_chat_history(urban_bot_username, limit=1):
                 last_msg_id = last_msg.id
             
-            if start_param:
-                await uclient.send_message(urban_bot_username, f"/start {start_param}")
+            await uclient.send_message(urban_bot_username, message_to_send)
             
             messages_received = []
             message_with_button = None
@@ -185,19 +199,27 @@ async def generate_fresh_link(client, message, link_id):
                     has_button = response_msg.reply_markup is not None
                     reply_markup = response_msg.reply_markup if has_button else None
                     
-                    if response_msg.text:
+                    text_to_show = response_msg.text or response_msg.caption
+                    if is_pub_link and has_button:
+                        text_to_show = "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ!\n\nᴄʟɪᴄᴋ ʙᴇʟᴏᴡ ᴛᴏ ᴘʀᴏᴄᴇᴇᴅ"
+                    
+                    if response_msg.text or response_msg.caption:
                         if idx == 0:
-                            await wait_msg.edit_text(response_msg.text, reply_markup=reply_markup)
+                            if response_msg.photo:
+                                await wait_msg.delete()
+                                await message.reply_photo(response_msg.photo.file_id, caption=text_to_show, reply_markup=reply_markup)
+                            elif response_msg.document:
+                                await wait_msg.delete()
+                                await message.reply_document(response_msg.document.file_id, caption=text_to_show, reply_markup=reply_markup)
+                            else:
+                                await wait_msg.edit_text(text_to_show, reply_markup=reply_markup)
                         else:
-                            await message.reply(response_msg.text, reply_markup=reply_markup)
-                    elif response_msg.caption:
-                        if idx == 0:
-                            await wait_msg.delete()
-                        
-                        if response_msg.photo:
-                            await message.reply_photo(response_msg.photo.file_id, caption=response_msg.caption, reply_markup=reply_markup)
-                        elif response_msg.document:
-                            await message.reply_document(response_msg.document.file_id, caption=response_msg.caption, reply_markup=reply_markup)
+                            if response_msg.photo:
+                                await message.reply_photo(response_msg.photo.file_id, caption=text_to_show, reply_markup=reply_markup)
+                            elif response_msg.document:
+                                await message.reply_document(response_msg.document.file_id, caption=text_to_show, reply_markup=reply_markup)
+                            else:
+                                await message.reply(text_to_show, reply_markup=reply_markup)
                     
                     if has_button:
                         await message.reply("<b>This Link Will Expire in 30 Second please Join fast ...</b>", parse_mode=enums.ParseMode.HTML)
