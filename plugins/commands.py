@@ -90,13 +90,14 @@ async def pub_command(client, message):
         if '/+' in channel_link or '/joinchat/' in channel_link:
             return await message.reply("**❌ Only public Telegram channel links are allowed. Private links are rejected.**")
 
+        link_id = await db.add_urban_link(channel_link)
+        bot_me = await client.get_me()
+        bot_link = f"https://t.me/{bot_me.username}?start=generate_{link_id}"
+
         await message.reply(
-            "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ!\n\nᴄʟɪᴄᴋ ʙᴇʟᴏᴡ ᴛᴏ ᴘʀᴏᴄᴇᴇᴅ",
-            reply_markup=InlineKeyboardMarkup(
-                [[
-                    InlineKeyboardButton("Join Channel", url=channel_link)
-                ]]
-            )
+            f"✅ **Link saved! Share this generated link with your users:**\n\n"
+            f"`{bot_link}`",
+            disable_web_page_preview=True
         )
     except Exception as e:
         await message.reply(f"**Error:** {str(e)}")
@@ -108,21 +109,21 @@ async def generate_fresh_link(client, message, link_id):
         # Get stored Urban Links URL by ID
         urban_link = await db.get_urban_link_by_id(link_id)
         if not urban_link:
-            return await wait_msg.edit_text("**The link configuration has expired or been removed. Please contact admin.**")
+            return await wait_msg.edit_text("**The link configuration has expired or been removed.**")
         
         # Extract bot username from the Urban Links URL
         bot_username_match = re.search(r'https://t\.me/(\w+)', urban_link)
         if not bot_username_match:
-            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
+            return await wait_msg.edit_text("**Invalid link configuration.**")
         
         urban_bot_username = bot_username_match.group(1).lower()
         
         # Extract the start parameter from the Urban Links URL
         start_param_match = re.search(r'\?start=(.+)', urban_link)
         if not start_param_match:
-            return await wait_msg.edit_text("**Invalid link configuration. Please contact admin.**")
-        
-        start_param = start_param_match.group(1)
+            start_param = None
+        else:
+            start_param = start_param_match.group(1)
         
         admin_session = await db.get_admin_session()
         if admin_session is None:
@@ -146,7 +147,8 @@ async def generate_fresh_link(client, message, link_id):
             async for last_msg in uclient.get_chat_history(urban_bot_username, limit=1):
                 last_msg_id = last_msg.id
             
-            await uclient.send_message(urban_bot_username, f"/start {start_param}")
+            if start_param:
+                await uclient.send_message(urban_bot_username, f"/start {start_param}")
             
             messages_received = []
             message_with_button = None
