@@ -66,6 +66,41 @@ async def set_link(client, message):
     except Exception as e:
         await message.reply(f"**Error:** {str(e)}")
 
+@Client.on_message(filters.command('pub') & filters.private)
+async def pub_command(client, message):
+    try:
+        args = message.command
+        if len(args) < 2:
+            return await message.reply("**Usage:** `/pub https://t.me/channel_username` or `/pub channel_username`")
+        
+        input_link = args[1].strip()
+        
+        # Normalize the link to a public username format or full t.me link
+        if input_link.startswith('https://t.me/'):
+            # Check if it's a private invite link (starts with + or joinchat)
+            if '/+' in input_link or '/joinchat/' in input_link:
+                return await message.reply("**❌ Only public Telegram channel links are allowed. Private links are rejected.**")
+            channel_link = input_link
+        else:
+            # Handle username input
+            username = input_link.replace('@', '')
+            channel_link = f"https://t.me/{username}"
+
+        # Final validation to ensure it's not a private link pattern
+        if '/+' in channel_link or '/joinchat/' in channel_link:
+            return await message.reply("**❌ Only public Telegram channel links are allowed. Private links are rejected.**")
+
+        await message.reply(
+            "ʜᴇʀᴇ ɪs ʏᴏᴜʀ ʟɪɴᴋ!\n\nᴄʟɪᴄᴋ ʙᴇʟᴏᴡ ᴛᴏ ᴘʀᴏᴄᴇᴇᴅ",
+            reply_markup=InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton("Join Channel", url=channel_link)
+                ]]
+            )
+        )
+    except Exception as e:
+        await message.reply(f"**Error:** {str(e)}")
+
 async def generate_fresh_link(client, message, link_id):
     try:
         wait_msg = await message.reply("⏳ **Please wait...**")
@@ -161,6 +196,9 @@ async def generate_fresh_link(client, message, link_id):
                             await message.reply_photo(response_msg.photo.file_id, caption=response_msg.caption, reply_markup=reply_markup)
                         elif response_msg.document:
                             await message.reply_document(response_msg.document.file_id, caption=response_msg.caption, reply_markup=reply_markup)
+                    
+                    if has_button:
+                        await message.reply("<b>This Link Will Expire in 30 Second please Join fast ...</b>", parse_mode=enums.ParseMode.HTML)
                 
                 # as it was replacing the actual content. Instead, show a warning if still no button.
                 if not message_with_button:
